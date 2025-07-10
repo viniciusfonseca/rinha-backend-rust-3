@@ -1,5 +1,5 @@
 CREATE UNLOGGED TABLE PAYMENTS (
-    correlation_id CHAR(32),
+    correlation_id CHAR(36),
     amount DOUBLE PRECISION,
     payment_processor CHAR(1),
     requested_at TIMESTAMP
