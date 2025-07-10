@@ -151,8 +151,8 @@ export async function setup() {
 
 export async function teardown() {
 
-  const from = "2000-01-01T00:00:00";
-  const to = "2900-01-01T00:00:00";
+  const from = "2000-01-01T00:00:00Z";
+  const to = "2900-01-01T00:00:00Z";
   const defaultResponse = await getPPPaymentsSummary("default", from, to);
   const fallbackResponse = await getPPPaymentsSummary("fallback", from, to);
   const backendPaymentsSummary = await getBackendPaymentsSummary(from, to);
@@ -223,6 +223,14 @@ export async function checkPayments() {
     );
 
   balanceInconsistencyCounter.add(inconsistencies);
+
+  if (inconsistencies > 0) {
+    console.log(`Found balance inconsistencies.`);
+    console.log(`Backend: ${JSON.stringify(backendPaymentsSummary)}`);
+    console.log(`Default: ${JSON.stringify(defaultAdminPaymentsSummary)}`);
+    console.log(`Fallback: ${JSON.stringify(fallbackAdminPaymentsSummary)}`);
+    console.log(`Time: ${from} to ${to}`);
+  }
 
   sleep(10);
 }

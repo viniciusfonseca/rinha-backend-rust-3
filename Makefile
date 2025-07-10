@@ -9,7 +9,9 @@ start-backend:
 	docker compose down
 	docker compose up --build
 
-image:
+ci-k6-test: start-payment-processors start-backend k6-test
+
+build-image:
 	docker build . -t distanteagle16/rinhabackend3
 
 push-image:

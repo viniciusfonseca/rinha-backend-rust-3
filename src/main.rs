@@ -1,6 +1,6 @@
 
 use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, Ordering}, Arc}};
-use axum::{extract::{Query, State}, response::IntoResponse, routing, Json, Router};
+use axum::{extract::{Query, State}, http::HeaderMap, response::IntoResponse, routing, Json, Router};
 use chrono::Utc;
 use futures_util::future;
 use serde::{Deserialize, Serialize};
@@ -196,15 +196,13 @@ struct PaymentPayload {
     amount: f64,
 }
 
-impl Into<QueueEvent> for PaymentPayload {
-    fn into(self) -> QueueEvent {
-        (self.correlation_id, self.amount, chrono::Utc::now())
-    }
-}
-
-async fn payments(State(state): State<Arc<AppState>>, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
+async fn payments(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
     tokio::spawn(async move {
-        let event: QueueEvent = payload.into();
+        let requested_at = headers.get(axum::http::header::DATE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(Utc::now);
+        let event: QueueEvent = (payload.correlation_id, payload.amount, requested_at);
         if let Ok(worker_url) = &state.worker_url {
             if let Err(e) = state.reqwest_client.post(worker_url)
                 .header("Content-Type", "application/json")
@@ -227,6 +225,8 @@ async fn queue_length(State(state): State<Arc<AppState>>) -> Vec<u8> {
     state.queue_len.load(Ordering::Relaxed).to_string().into_bytes()
 }
 
+const INSERT_STATEMENT: &'static str = "INSERT INTO payments (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)";
+
 async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requested_at): QueueEvent, payment_processor_id: PaymentProcessorIdentifier) -> Result<PgQueryResult, sqlx::Error> {
 
     let payment_processor = match payment_processor_id {
@@ -234,7 +234,7 @@ async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requeste
         PaymentProcessorIdentifier::Fallback => "F",
     };
 
-    sqlx::query("INSERT INTO PAYMENTS (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)")
+    sqlx::query(INSERT_STATEMENT)
         .bind(correlation_id)
         .bind(amount)
         .bind(payment_processor)
@@ -268,28 +268,22 @@ impl Into<PaymentsSummaryDetails> for PaymentsSummaryDetailsRow {
     }
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 struct PaymentsSummaryDetails {
     pub total_requests: i64,
     pub total_amount: f64
 }
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Debug)]
 struct PaymentsSummary {
     pub default: PaymentsSummaryDetails,
     pub fallback: PaymentsSummaryDetails
 }
 
 impl PaymentsSummary {
-    pub fn new(query_result: &Vec<PaymentsSummaryDetailsRow>) -> PaymentsSummary {
-        PaymentsSummary {
-            default: Self::get_summary(&query_result, "D".to_string()),
-            fallback: Self::get_summary(&query_result, "F".to_string())
-        }
-    }
-    fn get_summary(query_result: &Vec<PaymentsSummaryDetailsRow>, payment_processor_id: String) -> PaymentsSummaryDetails {
-        match query_result.iter().find(|row| row.payment_processor == payment_processor_id) {
+    fn get(query_result: Vec<PaymentsSummaryDetailsRow>, payment_processor: String) -> PaymentsSummaryDetails {
+        match query_result.iter().find(|row| row.payment_processor == payment_processor) {
             Some(element) => element.clone().into(),
             None => PaymentsSummaryDetails::default()
         }
@@ -304,8 +298,6 @@ GROUP BY payment_processor";
 
 async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, Option<chrono::DateTime<Utc>>>>) -> impl IntoResponse {
 
-    println!("Payments summary: {params:#?}");
-
     let from = params.get("from");
     let to = params.get("to");
 
@@ -315,8 +307,11 @@ async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Que
         .fetch_all(&state.pg_pool)
         .await {
             Ok(summary) => {
-                println!("Payments summary: {summary:#?}");
-                (axum::http::StatusCode::OK, serde_json::to_vec(&PaymentsSummary::new(&summary)).unwrap())
+                let default = PaymentsSummary::get(summary.clone(), "D".to_string());
+                let fallback = PaymentsSummary::get(summary.clone(), "F".to_string());
+                let summary = PaymentsSummary { default, fallback };
+                println!("Summary: {summary:?}");
+                (axum::http::StatusCode::OK, serde_json::to_vec(&summary).unwrap())
             },
             Err(err) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {err}").as_bytes().to_vec())
         }
