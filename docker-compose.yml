@@ -19,8 +19,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "50MB"
+          cpus: "0.1"
+          memory: "40MB"
 
   api02:
     <<: *api
@@ -51,6 +51,11 @@ services:
       DB_CONNECTION_STRING: postgres://postgres:1234@db:5432/rinhadb
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: "70MB"
 
   db:
     image: postgres
@@ -74,7 +79,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.75'
+          cpus: '0.4'
           memory: '200MB'
 
   nginx:
@@ -92,7 +97,7 @@ services:
       resources:
         limits:
           cpus: '0.15'
-          memory: '0.5GB'
+          memory: '50MB'
 
 networks:
   backend:

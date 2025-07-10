@@ -1,6 +1,8 @@
 
 use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, Ordering}, Arc}};
 use axum::{extract::{Query, State}, response::IntoResponse, routing, Json, Router};
+use chrono::Utc;
+use futures_util::future;
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgQueryResult, prelude::FromRow};
 use tokio::{sync::RwLock, task::JoinHandle, time::Instant};
@@ -232,7 +234,7 @@ async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requeste
         PaymentProcessorIdentifier::Fallback => "F",
     };
 
-    sqlx::query("INSERT INTO payments (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO PAYMENTS (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)")
         .bind(correlation_id)
         .bind(amount)
         .bind(payment_processor)
@@ -245,11 +247,12 @@ async fn process_queue_event(state: Arc<AppState>, event: QueueEvent) -> anyhow:
     let payment_processor_id = call_payment_processor(&state, &event).await?;
     if let Err(e) = insert_payment(&state, event, payment_processor_id).await {
         println!("Failed to insert payment: {e}");
+        return Err(e.into());
     }
     Ok(())
 }
 
-#[derive(FromRow, Default, Clone)]
+#[derive(FromRow, Default, Clone, Debug)]
 struct PaymentsSummaryDetailsRow {
     pub total_requests: i64,
     pub total_amount: f64,
@@ -299,17 +302,22 @@ FROM PAYMENTS
 WHERE requested_at BETWEEN $1 AND $2
 GROUP BY payment_processor";
 
-async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, Option<chrono::DateTime<Utc>>>>) -> impl IntoResponse {
 
-    let from = params.get("from").and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok());
-    let to = params.get("to").and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok());
+    println!("Payments summary: {params:#?}");
+
+    let from = params.get("from");
+    let to = params.get("to");
 
     match sqlx::query_as::<_, PaymentsSummaryDetailsRow>(PAYMENTS_SUMMARY_QUERY)
         .bind(from)
         .bind(to)
         .fetch_all(&state.pg_pool)
         .await {
-            Ok(summary) => (axum::http::StatusCode::OK, serde_json::to_vec(&PaymentsSummary::new(&summary)).unwrap()),
+            Ok(summary) => {
+                println!("Payments summary: {summary:#?}");
+                (axum::http::StatusCode::OK, serde_json::to_vec(&PaymentsSummary::new(&summary)).unwrap())
+            },
             Err(err) => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {err}").as_bytes().to_vec())
         }
 }
@@ -337,7 +345,6 @@ async fn update_payment_processor_health(state: &Arc<AppState>, payment_processo
         .await?;
 
     let response = serde_json::from_slice::<PaymentProcessorHealthResponse>(&body)?;
-    println!("health info for {url}: {response:?}");
 
     {
         let mut payment_processor = payment_processor.write().await;
@@ -414,18 +421,21 @@ async fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Re
 }
 
 async fn redirect_processing_payments(state: Arc<AppState>) {
-    println!("Redirecting processing payments");
     if let Ok(_) = state.redirect_lock.try_lock() {
+        println!("Redirecting processing payments");
         let mut events = Vec::new();
         for entry in &state.processing_payments {
             entry.abort();
             events.push(entry.key().clone());
         }
+        let mut handles = Vec::new();
         for event in events {
             _ = &state.processing_payments.remove(&event);
             let event: QueueEvent = serde_json::from_str::<QueueEvent>(&event).unwrap().clone();
-            state.send_event(event).await;
+            handles.push(state.send_event(event));
         }
+        future::join_all(handles).await;
+        println!("Done redirecting processing payments");
     }
 }
 

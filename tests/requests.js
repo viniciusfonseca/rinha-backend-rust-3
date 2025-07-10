@@ -115,6 +115,7 @@ export async function resetBackendDatabase() {
 
 export async function getBackendPaymentsSummary(from, to) {
 
+    console.log(`calling path: /payments-summary?from=${from}&to=${to}`);
     const response = await backendHttp.asyncGet(`/payments-summary?from=${from}&to=${to}`);
 
     if (response.status != 200) {
