@@ -416,11 +416,15 @@ async fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Re
 async fn redirect_processing_payments(state: Arc<AppState>) {
     println!("Redirecting processing payments");
     if let Ok(_) = state.redirect_lock.try_lock() {
+        let mut events = Vec::new();
         for entry in &state.processing_payments {
-            let event = serde_json::from_str(entry.key()).unwrap();
             entry.abort();
+            events.push(entry.key().clone());
+        }
+        for event in events {
+            _ = &state.processing_payments.remove(&event);
+            let event: QueueEvent = serde_json::from_str::<QueueEvent>(&event).unwrap().clone();
             state.send_event(event).await;
-            _ = &state.processing_payments.remove(entry.key());
         }
     }
 }
