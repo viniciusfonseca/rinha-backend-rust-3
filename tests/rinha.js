@@ -226,8 +226,9 @@ export async function checkPayments() {
 
   if (inconsistencies > 0) {
     console.log(`Found balance inconsistencies.`);
-    console.log(`Backend: ${JSON.stringify(backendPaymentsSummary)}`);
+    console.log(`Backend.default: ${JSON.stringify(backendPaymentsSummary.default)}`);
     console.log(`Default: ${JSON.stringify(defaultAdminPaymentsSummary)}`);
+    console.log(`Backend.fallback: ${JSON.stringify(backendPaymentsSummary.fallback)}`);
     console.log(`Fallback: ${JSON.stringify(fallbackAdminPaymentsSummary)}`);
     console.log(`Time: ${from} to ${to}`);
   }
