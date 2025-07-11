@@ -151,8 +151,8 @@ export async function setup() {
 
 export async function teardown() {
 
-  const from = "2000-01-01T00:00:00Z";
-  const to = "2900-01-01T00:00:00Z";
+  const from = "2000-01-01T00:00:00";
+  const to = "2900-01-01T00:00:00";
   const defaultResponse = await getPPPaymentsSummary("default", from, to);
   const fallbackResponse = await getPPPaymentsSummary("fallback", from, to);
   const backendPaymentsSummary = await getBackendPaymentsSummary(from, to);

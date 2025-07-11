@@ -1,10 +1,28 @@
 
-use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, Ordering}, Arc}};
+use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering}, Arc}};
 use axum::{extract::{Query, State}, http::HeaderMap, response::IntoResponse, routing, Json, Router};
 use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use sqlx::{postgres::PgQueryResult, prelude::FromRow};
-use tokio::{sync::RwLock, time::Instant};
+use tokio::time::Instant;
+
+pub struct AtomicF64 {
+    storage: AtomicU64,
+}
+impl AtomicF64 {
+    pub fn new(value: f64) -> Self {
+        let as_u64 = value.to_bits();
+        Self { storage: AtomicU64::new(as_u64) }
+    }
+    pub fn store(&self, value: f64, ordering: Ordering) {
+        let as_u64 = value.to_bits();
+        self.storage.store(as_u64, ordering)
+    }
+    pub fn load(&self, ordering: Ordering) -> f64 {
+        let as_u64 = self.storage.load(ordering);
+        f64::from_bits(as_u64)
+    }
+}
 
 type QueueEvent = (String, f64, chrono::DateTime<chrono::Utc>);
 
@@ -18,23 +36,52 @@ enum PaymentProcessorIdentifier {
 struct PaymentProcessor {
     pub id: PaymentProcessorIdentifier,
     pub url: String,
-    pub failing: bool,
-    pub min_response_time: f64,
+    failing: Arc<AtomicBool>,
+    min_response_time: Arc<AtomicF64>,
     pub tax: f64,
-    pub efficiency: f64
+    efficiency: Arc<AtomicF64>,
+}
+
+impl PaymentProcessor {
+    pub fn failing(&self) -> bool { self.failing.load(Ordering::Relaxed) }
+    pub fn min_response_time(&self) -> f64 { self.min_response_time.load(Ordering::Relaxed) }
+    pub fn efficiency(&self) -> f64 { self.efficiency.load(Ordering::Relaxed) }
+
+    pub fn update_failing(&self, failing: bool) { self.failing.store(failing, Ordering::Relaxed); }
+    pub fn update_min_response_time(&self, min_response_time: f64) { self.min_response_time.store(min_response_time, Ordering::Relaxed); }
+    pub fn update_efficiency(&self, efficiency: f64) { self.efficiency.store(efficiency, Ordering::Relaxed); }
 }
 
 struct AppState {
     pub pg_pool: sqlx::PgPool,
     pub tx: tokio::sync::mpsc::Sender<QueueEvent>,
     pub reqwest_client: reqwest::Client,
-    pub default_payment_processor: RwLock<PaymentProcessor>,
-    pub fallback_payment_processor: RwLock<PaymentProcessor>,
-    pub preferred_payment_processor: RwLock<PaymentProcessor>,
+    pub default_payment_processor: PaymentProcessor,
+    pub fallback_payment_processor: PaymentProcessor,
+    preferred_payment_processor: AtomicU16,
     pub worker_url: Result<String, std::env::VarError>,
     pub signal_tx: tokio::sync::mpsc::Sender<()>,
     pub queue_len: AtomicI32,
     pub consuming_payments: AtomicBool
+}
+
+impl AppState {
+    pub fn consuming_payments(&self) -> bool { self.consuming_payments.load(Ordering::Relaxed) }
+    pub fn update_consuming_payments(&self, consuming_payments: bool) { self.consuming_payments.store(consuming_payments, Ordering::Relaxed); }
+
+    pub fn preferred_payment_processor(&self) -> &PaymentProcessor {
+        match self.preferred_payment_processor.load(Ordering::Relaxed) {
+            0 => &self.default_payment_processor,
+            1 => &self.fallback_payment_processor,
+            _ => panic!("Invalid preferred payment processor"),
+        }
+    }
+    pub fn update_preferred_payment_processor(&self, preferred_payment_processor: PaymentProcessorIdentifier) {
+        match preferred_payment_processor {
+            PaymentProcessorIdentifier::Default => self.preferred_payment_processor.store(0, Ordering::Relaxed),
+            PaymentProcessorIdentifier::Fallback => self.preferred_payment_processor.store(1, Ordering::Relaxed),
+        }
+    }
 }
 
 impl AppState {
@@ -58,32 +105,31 @@ async fn main() -> anyhow::Result<()> {
     let pg_pool = sqlx::PgPool::connect(&db_conn_str).await?;
     let reqwest_client = reqwest::Client::new();
 
-    let default_payment_processor = RwLock::new(PaymentProcessor {
+    let default_payment_processor = PaymentProcessor {
         id: PaymentProcessorIdentifier::Default,
         url: std::env::var("PAYMENT_PROCESSOR_URL_DEFAULT")?,
-        failing: false,
-        min_response_time: 0.0,
+        failing: Arc::new(AtomicBool::new(false)),
+        min_response_time: Arc::new(AtomicF64::new(0.0)),
         tax: 0.05,
-        efficiency: 0.0
-    });
+        efficiency: Arc::new(AtomicF64::new(0.0)),
+    };
 
-    let fallback_payment_processor = RwLock::new(PaymentProcessor {
+    let fallback_payment_processor = PaymentProcessor {
         id: PaymentProcessorIdentifier::Fallback,
         url: std::env::var("PAYMENT_PROCESSOR_URL_FALLBACK")?,
-        failing: false,
-        min_response_time: 0.0,
+        failing: Arc::new(AtomicBool::new(false)),
+        min_response_time: Arc::new(AtomicF64::new(0.0)),
         tax: 0.15,
-        efficiency: 0.0
-    });
-
-    let preferred_payment_processor = {
-        let processor = { default_payment_processor.read().await }.clone();
-        RwLock::new(processor)
+        efficiency: Arc::new(AtomicF64::new(0.0)),
     };
+
+    let preferred_payment_processor = AtomicU16::new(0);
 
     let worker_url = std::env::var("WORKER_URL");
 
     let queue_len = AtomicI32::new(0);
+
+    let consuming_payments = AtomicBool::new(true);
 
     let state = Arc::new(AppState {
         pg_pool,
@@ -95,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
         worker_url,
         signal_tx,
         queue_len,
-        consuming_payments: AtomicBool::new(true)
+        consuming_payments
     });
 
     let state_async_0 = state.clone();
@@ -119,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
                 loop {
                     while let Some(event) = rx.recv().await {
                         state_async_0.queue_len.fetch_add(-1, Ordering::Relaxed);
-                        if !state_async_0.consuming_payments.load(Ordering::Relaxed) {
+                        if !state_async_0.consuming_payments() {
                             state_async_0.send_event(event).await;
                             println!("Both payment processors are failing. Break event consumer loop");
                             break
@@ -142,14 +188,10 @@ async fn main() -> anyhow::Result<()> {
                         update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
                     };
                     _ = update_preferred_payment_processor(&state_async_1).await;
-                    let (default_payment_processor_failing, fallback_payment_processor_failing) = {(
-                        state_async_1.default_payment_processor.read().await.failing,
-                        state_async_1.fallback_payment_processor.read().await.failing
-                    )};
-                    if !state_async_1.consuming_payments.load(Ordering::Relaxed) && (!default_payment_processor_failing || !fallback_payment_processor_failing) {
+                    if !state_async_1.consuming_payments() && (!state_async_1.default_payment_processor.failing() || !state_async_1.fallback_payment_processor.failing()) {
                         _ = state_async_1.signal_tx.send(()).await;
                         println!("One of the payment processors is healthy. Start consuming payments");
-                        state_async_1.consuming_payments.store(true, Ordering::Relaxed);
+                        state_async_1.update_consuming_payments(true);
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(5005)).await;
                 }
@@ -323,7 +365,7 @@ async fn update_payment_processor_health(state: &Arc<AppState>, payment_processo
         PaymentProcessorIdentifier::Fallback => &state.fallback_payment_processor
     };
 
-    let url = { payment_processor.read().await.url.clone() };
+    let url = &payment_processor.url;
 
     let body = state.reqwest_client.get(format!("{url}/payments/service-health"))
         .send()
@@ -333,12 +375,9 @@ async fn update_payment_processor_health(state: &Arc<AppState>, payment_processo
 
     let response = serde_json::from_slice::<PaymentProcessorHealthResponse>(&body)?;
 
-    {
-        let mut payment_processor = payment_processor.write().await;
-        payment_processor.failing = response.failing;
-        payment_processor.min_response_time = response.min_response_time;
-        payment_processor.efficiency = (1000.0 / f64::max(response.min_response_time, 1.0)) / payment_processor.tax;
-    }
+    payment_processor.update_failing(response.failing);
+    payment_processor.update_min_response_time(response.min_response_time);
+    payment_processor.update_efficiency((1000.0 / f64::max(response.min_response_time, 1.0)) / payment_processor.tax);
 
     Ok(())
 }
@@ -355,14 +394,11 @@ async fn update_payment_processor_state(
         PaymentProcessorIdentifier::Fallback => &state.fallback_payment_processor
     };
 
-    {
-        let mut payment_processor = payment_processor.write().await;
-        if let Some(failing) = failing {
-            payment_processor.failing = failing;
-        }
-        if let Some(min_response_time) = min_response_time {
-            payment_processor.min_response_time = min_response_time;
-        }
+    if let Some(failing) = failing {
+        payment_processor.update_failing(failing);
+    }
+    if let Some(min_response_time) = min_response_time {
+        payment_processor.update_min_response_time(min_response_time);
     }
 
     Ok(())
@@ -370,36 +406,32 @@ async fn update_payment_processor_state(
 
 async fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Result<()> {
     
-    let default_payment_processor = &{ state.default_payment_processor.read().await.clone() };
-    let fallback_payment_processor = &{ state.fallback_payment_processor.read().await.clone() };
-
-    let new_preferred_payment_processor = PaymentProcessor::clone({
-        if default_payment_processor.failing && fallback_payment_processor.failing {
+    let new_preferred_payment_processor = {
+        if state.default_payment_processor.failing() && state.fallback_payment_processor.failing() {
             state.consuming_payments.store(false, Ordering::Relaxed);
             return Err(anyhow::Error::msg("Both payment processors are failing"));
         }
-        else if fallback_payment_processor.failing {
-            default_payment_processor
+        else if state.fallback_payment_processor.failing() {
+            PaymentProcessorIdentifier::Default
         }
-        else if default_payment_processor.failing {
-            fallback_payment_processor
+        else if state.default_payment_processor.failing() {
+            PaymentProcessorIdentifier::Fallback
         }
-        else if default_payment_processor.min_response_time < 10.0 {
-            default_payment_processor
+        else if state.default_payment_processor.min_response_time() < 10.0 {
+            PaymentProcessorIdentifier::Default
         }
-        else if default_payment_processor.efficiency >= fallback_payment_processor.efficiency {
-            default_payment_processor
+        else if state.default_payment_processor.efficiency() >= state.fallback_payment_processor.efficiency() {
+            PaymentProcessorIdentifier::Default
         }
         else {
-            fallback_payment_processor
+            PaymentProcessorIdentifier::Fallback
         }
-    });
+    };
 
-    let preferred_payment_processor = { state.preferred_payment_processor.read().await.clone() };
-    if preferred_payment_processor.id != new_preferred_payment_processor.id {
-        println!("Preferred payment processor changing from {:?} to {:?}", preferred_payment_processor.id, new_preferred_payment_processor.id);
-        let mut preferred_payment_processor = state.preferred_payment_processor.write().await;
-        *preferred_payment_processor = new_preferred_payment_processor.clone();
+    let preferred_payment_processor = state.preferred_payment_processor();
+    if preferred_payment_processor.id != new_preferred_payment_processor {
+        println!("Preferred payment processor changing from {:?} to {:?}", preferred_payment_processor.id, new_preferred_payment_processor);
+        state.update_preferred_payment_processor(new_preferred_payment_processor);
     }
 
     Ok(())
@@ -415,12 +447,9 @@ struct PaymentProcessorRequest {
 
 async fn call_payment_processor(state: &Arc<AppState>, (correlation_id, amount, requested_at): &QueueEvent) -> anyhow::Result<PaymentProcessorIdentifier> {
 
-    let (id, failing, url) = {
-        let payment_processor = &state.preferred_payment_processor.read().await;
-        (payment_processor.id.clone(), payment_processor.failing, payment_processor.url.clone())
-    };
+    let payment_processor = state.preferred_payment_processor();
 
-    if failing {
+    if payment_processor.failing() {
         let state = state.clone();
         let (correlation_id, amount, requested_at) = (correlation_id.clone(), *amount, requested_at.clone());
         tokio::spawn(async move {
@@ -428,7 +457,10 @@ async fn call_payment_processor(state: &Arc<AppState>, (correlation_id, amount, 
             state.send_event((correlation_id, amount, requested_at)).await;
         });
         return Err(anyhow::Error::msg("Payment processor is failing"));
-    } 
+    }
+
+    let id = &state.preferred_payment_processor().id;
+    let url = &payment_processor.url;
 
     let body = PaymentProcessorRequest {
         correlation_id: correlation_id.to_string(),
@@ -445,8 +477,6 @@ async fn call_payment_processor(state: &Arc<AppState>, (correlation_id, amount, 
         .await?;
     let elapsed = start.elapsed();
 
-    let state = state.clone();
-
     let response_status = response.status().as_u16();
 
     if response_status >= 400 && response_status < 500 {
@@ -455,19 +485,22 @@ async fn call_payment_processor(state: &Arc<AppState>, (correlation_id, amount, 
 
     if response.status().as_u16() >= 500 {
         let (correlation_id, amount, requested_at) = (correlation_id.clone(), *amount, requested_at.clone());
+        let state_async = state.clone();
+        let id_async = id.clone();
         tokio::spawn(async move {
-            _ = update_payment_processor_state(&state, id, Some(true), Some(elapsed.as_secs_f64())).await;
-            _ = update_preferred_payment_processor(&state).await;
-            state.send_event((correlation_id, amount, requested_at)).await;
+            _ = update_payment_processor_state(&state_async, id_async, Some(true), Some(elapsed.as_secs_f64())).await;
+            _ = update_preferred_payment_processor(&state_async).await;
+            state_async.send_event((correlation_id, amount, requested_at)).await;
         });
         return Err(anyhow::Error::msg("Payment processor returned error"));
     }
 
+    let state_async = state.clone();
     let id_async = id.clone();
     tokio::spawn(async move {
-        _ = update_payment_processor_state(&state, id_async, Some(false), Some(elapsed.as_secs_f64())).await;
-        _ = update_preferred_payment_processor(&state).await;
+        _ = update_payment_processor_state(&state_async, id_async, Some(false), Some(elapsed.as_secs_f64())).await;
+        _ = update_preferred_payment_processor(&state_async).await;
     });
 
-    Ok(id)
+    Ok(id.clone())
 }
