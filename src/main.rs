@@ -1,7 +1,7 @@
 
 use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, Ordering}, Arc}};
 use axum::{extract::{Query, State}, http::HeaderMap, response::IntoResponse, routing, Json, Router};
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use sqlx::{postgres::PgQueryResult, prelude::FromRow};
 use tokio::{sync::RwLock, time::Instant};
@@ -48,8 +48,9 @@ impl AppState {
 async fn main() -> anyhow::Result<()> {
 
     let node = std::env::var("NODE")?;
+    let worker_max_threads = std::env::var("WORKER_MAX_THREADS").unwrap_or("500".to_string()).parse()?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(50000);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(worker_max_threads);
 
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel(1);
 
@@ -282,10 +283,15 @@ FROM PAYMENTS
 WHERE requested_at BETWEEN $1 AND $2
 GROUP BY payment_processor";
 
-async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, Option<chrono::DateTime<Utc>>>>) -> impl IntoResponse {
+fn date_str_to_datetime(value: &str) -> Option<chrono::DateTime<Utc>> {
+    value.parse().ok()
+        .or_else(|| value.parse().ok().map(|value| Utc.from_local_datetime(&value).unwrap()))
+}
 
-    let from = params.get("from");
-    let to = params.get("to");
+async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+
+    let from = date_str_to_datetime(params.get("from").unwrap());
+    let to = date_str_to_datetime(params.get("to").unwrap());
 
     match sqlx::query_as::<_, PaymentsSummaryDetailsRow>(PAYMENTS_SUMMARY_QUERY)
         .bind(from)
@@ -391,10 +397,9 @@ async fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Re
 
     let preferred_payment_processor = { state.preferred_payment_processor.read().await.clone() };
     if preferred_payment_processor.id != new_preferred_payment_processor.id {
+        println!("Preferred payment processor changing from {:?} to {:?}", preferred_payment_processor.id, new_preferred_payment_processor.id);
         let mut preferred_payment_processor = state.preferred_payment_processor.write().await;
         *preferred_payment_processor = new_preferred_payment_processor.clone();
-
-        println!("Preferred payment processor changed from {:?} to {:?}", preferred_payment_processor.id, new_preferred_payment_processor.id);
     }
 
     Ok(())
