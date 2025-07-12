@@ -1,7 +1,7 @@
 
 use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering}, Arc}};
-use axum::{extract::{Query, State}, http::HeaderMap, response::IntoResponse, routing, Json, Router};
-use chrono::{TimeZone, Utc};
+use axum::{extract::{Query, State}, http::{request, HeaderMap}, response::IntoResponse, routing, Json, Router};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgQueryResult, prelude::FromRow, types::Decimal};
 use tokio::{sync::Semaphore, time::Instant};
@@ -24,7 +24,7 @@ impl AtomicF64 {
     }
 }
 
-type QueueEvent = (String, Decimal, chrono::DateTime<chrono::Utc>);
+type QueueEvent = (String, Decimal);
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum PaymentProcessorIdentifier {
@@ -85,8 +85,8 @@ impl AppState {
 }
 
 impl AppState {
-    async fn send_event(&self, event: QueueEvent) {
-        _ = self.tx.send(event).await;
+    async fn send_event(&self, event: &QueueEvent) {
+        _ = self.tx.send(event.clone()).await;
         self.queue_len.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -168,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
                     while let Some(event) = rx.recv().await {
                         state_async_0.queue_len.fetch_add(-1, Ordering::Relaxed);
                         if !state_async_0.consuming_payments() {
-                            state_async_0.send_event(event).await;
+                            state_async_0.send_event(&event).await;
                             println!("Both payment processors are failing. Break event consumer loop");
                             break
                         }
@@ -176,8 +176,9 @@ async fn main() -> anyhow::Result<()> {
                         let permit = semaphore.clone().acquire_owned().await;
                         tokio::spawn(async move {
                             let _p = permit;
-                            if let Err(e) = process_queue_event(state_async_0, event).await {
+                            if let Err(e) = process_queue_event(&state_async_0, &event).await {
                                 eprintln!("Failed to process queue event: {e}");
+                                state_async_0.send_event(&event).await;
                             }
                         });
                     }
@@ -223,13 +224,9 @@ struct PaymentPayload {
     amount: Decimal,
 }
 
-async fn payments(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
+async fn payments(State(state): State<Arc<AppState>>, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
     tokio::spawn(async move {
-        let requested_at = headers.get(axum::http::header::DATE)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse().ok())
-            .unwrap_or_else(Utc::now);
-        let event: QueueEvent = (payload.correlation_id, payload.amount, requested_at);
+        let event: QueueEvent = (payload.correlation_id, payload.amount);
         if let Ok(worker_url) = &state.worker_url {
             if let Err(e) = state.reqwest_client.post(worker_url)
                 .header("Content-Type", "application/json")
@@ -244,7 +241,7 @@ async fn payments(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(p
 }
 
 async fn events(State(state): State<Arc<AppState>>, Json(payload): Json<QueueEvent>) -> axum::http::StatusCode {
-    state.send_event(payload.into()).await;
+    state.send_event(&payload.into()).await;
     axum::http::StatusCode::ACCEPTED
 }
 
@@ -255,7 +252,12 @@ async fn purge_payments(State(state): State<Arc<AppState>>) -> axum::http::Statu
 
 const INSERT_STATEMENT: &'static str = "INSERT INTO payments (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)";
 
-async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requested_at): QueueEvent, payment_processor_id: &PaymentProcessorIdentifier) -> Result<PgQueryResult, sqlx::Error> {
+async fn insert_payment(
+    state: &Arc<AppState>,
+    (correlation_id, amount): &QueueEvent,
+    payment_processor_id: &PaymentProcessorIdentifier,
+    requested_at: DateTime<Utc>
+) -> Result<PgQueryResult, sqlx::Error> {
 
     let payment_processor = match payment_processor_id {
         PaymentProcessorIdentifier::Default => "D",
@@ -271,10 +273,14 @@ async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requeste
         .await
 }
 
-async fn process_queue_event(state: Arc<AppState>, event: QueueEvent) -> anyhow::Result<()> {
-    let payment_processor_id = call_payment_processor(&state, &event).await?;
-    insert_payment(&state, event, payment_processor_id).await?;
-    Ok(())
+async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<()> {
+    while state.consuming_payments() {
+        if let Ok((payment_processor_id, requested_at)) = call_payment_processor(&state, &event).await {
+            insert_payment(&state, &event, payment_processor_id, requested_at).await?;
+            return Ok(())
+        }
+    }
+    Err(anyhow::Error::msg("Payments are not being consumed"))
 }
 
 #[derive(FromRow, Default, Clone, Debug)]
@@ -321,7 +327,7 @@ FROM PAYMENTS
 WHERE requested_at BETWEEN $1 AND $2
 GROUP BY payment_processor";
 
-fn date_str_to_datetime(value: &str) -> Option<chrono::DateTime<Utc>> {
+fn date_str_to_datetime(value: &str) -> Option<DateTime<Utc>> {
     value.parse().ok()
         .or_else(|| value.parse().ok().map(|value| Utc.from_local_datetime(&value).unwrap()))
 }
@@ -383,7 +389,7 @@ fn update_payment_processor_state(
     payment_processor_id: &PaymentProcessorIdentifier,
     failing: Option<bool>,
     min_response_time: Option<f64>
-) -> anyhow::Result<()> {
+) {
 
     let payment_processor = match payment_processor_id {
         PaymentProcessorIdentifier::Default => &state.default_payment_processor,
@@ -397,14 +403,13 @@ fn update_payment_processor_state(
         payment_processor.update_min_response_time(min_response_time);
     }
 
-    Ok(())
 }
 
 fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Result<()> {
     
     let new_preferred_payment_processor = {
         if state.default_payment_processor.failing() && state.fallback_payment_processor.failing() {
-            state.consuming_payments.store(false, Ordering::Relaxed);
+            state.update_consuming_payments(false);
             return Err(anyhow::Error::msg("Both payment processors are failing"));
         }
         else if state.fallback_payment_processor.failing() {
@@ -441,23 +446,23 @@ struct PaymentProcessorRequest {
     pub requested_at: chrono::DateTime<Utc>
 }
 
-async fn call_payment_processor<'a>(state: &'a Arc<AppState>, (correlation_id, amount, requested_at): &QueueEvent) -> anyhow::Result<&'a PaymentProcessorIdentifier> {
+async fn call_payment_processor<'a>(state: &'a Arc<AppState>, (correlation_id, amount): &QueueEvent) -> anyhow::Result<(&'a PaymentProcessorIdentifier, DateTime<Utc>)> {
 
     let payment_processor = state.preferred_payment_processor();
 
     if payment_processor.failing() {
         _ = update_preferred_payment_processor(&state);
-        state.send_event((correlation_id.clone(), *amount, *requested_at)).await;
         return Err(anyhow::Error::msg("Payment processor is failing"));
     }
 
     let id = &state.preferred_payment_processor().id;
     let url = &payment_processor.url;
+    let requested_at = Utc::now();
 
     let body = PaymentProcessorRequest {
         correlation_id: correlation_id.to_string(),
         amount: *amount,
-        requested_at: *requested_at,
+        requested_at,
     };
     
     let start = Instant::now();
@@ -477,14 +482,13 @@ async fn call_payment_processor<'a>(state: &'a Arc<AppState>, (correlation_id, a
     }
 
     if response.status().as_u16() >= 500 {
-        _ = update_payment_processor_state(&state, id, Some(true), Some(elapsed.as_secs_f64()));
+        update_payment_processor_state(&state, id, Some(true), Some(elapsed.as_secs_f64()));
         _ = update_preferred_payment_processor(&state);
-        state.send_event((correlation_id.clone(), *amount, *requested_at)).await;
         return Err(anyhow::Error::msg("Payment processor returned error"));
     }
 
-    _ = update_payment_processor_state(&state, id, Some(false), Some(elapsed.as_secs_f64()));
+    update_payment_processor_state(&state, id, Some(false), Some(elapsed.as_secs_f64()));
     _ = update_preferred_payment_processor(&state);
 
-    Ok(id)
+    Ok((id, requested_at))
 }
