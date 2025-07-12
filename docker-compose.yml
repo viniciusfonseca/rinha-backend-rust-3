@@ -20,7 +20,7 @@ services:
       resources:
         limits:
           cpus: "0.1"
-          memory: "10MB"
+          memory: "15MB"
 
   api02:
     <<: *api
@@ -81,7 +81,7 @@ services:
       resources:
         limits:
           cpus: '0.4'
-          memory: '200MB'
+          memory: '150MB'
 
   nginx:
     image: nginx:latest
@@ -98,7 +98,7 @@ services:
       resources:
         limits:
           cpus: '0.15'
-          memory: '40MB'
+          memory: '30MB'
 
 networks:
   backend:

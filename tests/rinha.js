@@ -251,24 +251,25 @@ export async function define_stage() {
 
 export function handleSummary(data) {
 
-  const expected_total_amount = data.metrics.transactions_success.values.count * paymentRequestFixedAmount;
-  const actual_total_amount = data.metrics.total_transactions_amount.values.count;
-  const difference_total_amount = expected_total_amount - actual_total_amount;
+  const expected_total_amount = Math.round(data.metrics.transactions_success.values.count * paymentRequestFixedAmount, 2);
+  const actual_total_amount = Math.round(data.metrics.total_transactions_amount.values.count, 2);
+  const difference_total_amount = Math.round(expected_total_amount - actual_total_amount, 2);
 
-  const default_total_fee = data.metrics.default_total_fee.values.count;
-  const fallback_total_fee = data.metrics.fallback_total_fee.values.count;
-  const total_fee = default_total_fee + fallback_total_fee;
+  const default_total_fee = Math.round(data.metrics.default_total_fee.values.coun, 2);
+  const fallback_total_fee = Math.round(data.metrics.fallback_total_fee.values.count, 2);
+  const total_fee = Math.round(default_total_fee + fallback_total_fee, 2);
   
   const p_99 = data.metrics["http_req_duration{expected_response:true}"].values["p(99)"];
   const p_99_bonus = Math.max((11 - p_99) * 0.02, 0);
   const contains_inconsistencies = difference_total_amount != 0 || data.metrics.balance_inconsistency_amount.values.count != 0;
   const inconsistencies_fine = contains_inconsistencies ? 0.35 : 0;
 
-  const liquid_partial_amount = (actual_total_amount - total_fee);
+  const liquid_partial_amount = Math.round(actual_total_amount - total_fee, 2);
 
-  const liquid_amount =  liquid_partial_amount
+  const liquid_amount = Math.round(
+                         liquid_partial_amount
                       + (liquid_partial_amount * p_99_bonus)
-                      - (liquid_partial_amount * inconsistencies_fine);
+                      - (liquid_partial_amount * inconsistencies_fine), 2);
 
   const custom_data = {
     liquid_amount: Math.round(liquid_amount, 2),
