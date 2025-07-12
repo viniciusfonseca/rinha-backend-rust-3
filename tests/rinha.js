@@ -272,8 +272,9 @@ export function handleSummary(data) {
                       - (liquid_partial_amount * inconsistencies_fine), 2);
 
   const custom_data = {
-    liquid_amount: Math.round(liquid_amount, 2),
     points: "The 'liquid_amount' is the total points/profit you got.",
+    liquid_partial_amount: liquid_partial_amount,
+    liquid_amount: liquid_amount,
     actual_total_amount: actual_total_amount,
     expected_total_amount: expected_total_amount,
     p_99: Math.round(p_99, 2),
