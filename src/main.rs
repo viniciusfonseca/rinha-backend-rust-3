@@ -2,9 +2,9 @@
 use std::{collections::HashMap, sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU64, Ordering}, Arc}};
 use axum::{extract::{Query, State}, http::HeaderMap, response::IntoResponse, routing, Json, Router};
 use chrono::{TimeZone, Utc};
-use serde::{Deserialize, Serialize, Serializer};
-use sqlx::{postgres::PgQueryResult, prelude::FromRow};
-use tokio::time::Instant;
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgQueryResult, prelude::FromRow, types::Decimal};
+use tokio::{sync::Semaphore, time::Instant};
 
 pub struct AtomicF64 {
     storage: AtomicU64,
@@ -24,7 +24,7 @@ impl AtomicF64 {
     }
 }
 
-type QueueEvent = (String, f64, chrono::DateTime<chrono::Utc>);
+type QueueEvent = (String, Decimal, chrono::DateTime<chrono::Utc>);
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum PaymentProcessorIdentifier {
@@ -95,9 +95,8 @@ impl AppState {
 async fn main() -> anyhow::Result<()> {
 
     let node = std::env::var("NODE")?;
-    let worker_max_threads = std::env::var("WORKER_MAX_THREADS").unwrap_or("500".to_string()).parse()?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::channel(worker_max_threads);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(50000);
 
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel(1);
 
@@ -152,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
             let app = Router::new()
                 .route("/payments", routing::post(payments))
                 .route("/payments-summary", routing::get(payments_summary))
+                .route("/purge-payments", routing::post(purge_payments))
                 .with_state(state);
 
             let tcp_listen = std::env::var("TCP_LISTEN")?;
@@ -163,6 +163,8 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(async move {
                 println!("Starting queue processor");
                 loop {
+                    let worker_max_threads = std::env::var("WORKER_MAX_THREADS").unwrap_or("500".to_string()).parse().unwrap();
+                    let semaphore = Arc::new(Semaphore::new(worker_max_threads));
                     while let Some(event) = rx.recv().await {
                         state_async_0.queue_len.fetch_add(-1, Ordering::Relaxed);
                         if !state_async_0.consuming_payments() {
@@ -171,8 +173,10 @@ async fn main() -> anyhow::Result<()> {
                             break
                         }
                         let state_async_0 = state_async_0.clone();
+                        let permit = semaphore.clone().acquire_owned().await;
                         tokio::spawn(async move {
-                            if let Err(e) = process_queue_event(state_async_0.clone(), event).await {
+                            let _p = permit;
+                            if let Err(e) = process_queue_event(state_async_0, event).await {
                                 eprintln!("Failed to process queue event: {e}");
                             }
                         });
@@ -187,8 +191,8 @@ async fn main() -> anyhow::Result<()> {
                         update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
                         update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
                     };
-                    _ = update_preferred_payment_processor(&state_async_1).await;
-                    if !state_async_1.consuming_payments() && (!state_async_1.default_payment_processor.failing() || !state_async_1.fallback_payment_processor.failing()) {
+                    let update_result = update_preferred_payment_processor(&state_async_1);
+                    if !state_async_1.consuming_payments() && update_result.is_ok() {
                         _ = state_async_1.signal_tx.send(()).await;
                         println!("One of the payment processors is healthy. Start consuming payments");
                         state_async_1.update_consuming_payments(true);
@@ -199,7 +203,6 @@ async fn main() -> anyhow::Result<()> {
 
             let app = Router::new()
                 .route("/", routing::post(events))
-                .route("/queue-length", routing::get(queue_length))
                 .with_state(state);
 
             let tcp_listen = std::env::var("TCP_LISTEN")?;
@@ -217,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
 #[serde(rename_all = "camelCase")]
 struct PaymentPayload {
     correlation_id: String,
-    amount: f64,
+    amount: Decimal,
 }
 
 async fn payments(State(state): State<Arc<AppState>>, headers: HeaderMap, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
@@ -245,13 +248,14 @@ async fn events(State(state): State<Arc<AppState>>, Json(payload): Json<QueueEve
     axum::http::StatusCode::ACCEPTED
 }
 
-async fn queue_length(State(state): State<Arc<AppState>>) -> Vec<u8> {
-    state.queue_len.load(Ordering::Relaxed).to_string().into_bytes()
+async fn purge_payments(State(state): State<Arc<AppState>>) -> axum::http::StatusCode {
+    _ = sqlx::query("DELETE FROM payments").execute(&state.pg_pool).await;
+    axum::http::StatusCode::ACCEPTED
 }
 
 const INSERT_STATEMENT: &'static str = "INSERT INTO payments (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)";
 
-async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requested_at): QueueEvent, payment_processor_id: PaymentProcessorIdentifier) -> Result<PgQueryResult, sqlx::Error> {
+async fn insert_payment(state: &Arc<AppState>, (correlation_id, amount, requested_at): QueueEvent, payment_processor_id: &PaymentProcessorIdentifier) -> Result<PgQueryResult, sqlx::Error> {
 
     let payment_processor = match payment_processor_id {
         PaymentProcessorIdentifier::Default => "D",
@@ -276,7 +280,7 @@ async fn process_queue_event(state: Arc<AppState>, event: QueueEvent) -> anyhow:
 #[derive(FromRow, Default, Clone, Debug)]
 struct PaymentsSummaryDetailsRow {
     pub total_requests: i64,
-    pub total_amount: f64,
+    pub total_amount: Decimal,
     pub payment_processor: String
 }
 
@@ -289,19 +293,11 @@ impl Into<PaymentsSummaryDetails> for PaymentsSummaryDetailsRow {
     }
 }
 
-fn f64_ser2<S>(fv: &f64, se: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    se.serialize_f64((fv * 100.).round() / 100.)
-}
-
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
 struct PaymentsSummaryDetails {
     pub total_requests: i64,
-    #[serde(serialize_with = "f64_ser2")]
-    pub total_amount: f64
+    pub total_amount: Decimal
 }
 
 #[derive(Serialize, Default, Debug)]
@@ -382,9 +378,9 @@ async fn update_payment_processor_health(state: &Arc<AppState>, payment_processo
     Ok(())
 }
 
-async fn update_payment_processor_state(
+fn update_payment_processor_state(
     state: &Arc<AppState>,
-    payment_processor_id: PaymentProcessorIdentifier,
+    payment_processor_id: &PaymentProcessorIdentifier,
     failing: Option<bool>,
     min_response_time: Option<f64>
 ) -> anyhow::Result<()> {
@@ -404,7 +400,7 @@ async fn update_payment_processor_state(
     Ok(())
 }
 
-async fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Result<()> {
+fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Result<()> {
     
     let new_preferred_payment_processor = {
         if state.default_payment_processor.failing() && state.fallback_payment_processor.failing() {
@@ -441,21 +437,17 @@ async fn update_preferred_payment_processor(state: &Arc<AppState>) -> anyhow::Re
 #[serde(rename_all = "camelCase")]
 struct PaymentProcessorRequest {
     pub correlation_id: String,
-    pub amount: f64,
+    pub amount: Decimal,
     pub requested_at: chrono::DateTime<Utc>
 }
 
-async fn call_payment_processor(state: &Arc<AppState>, (correlation_id, amount, requested_at): &QueueEvent) -> anyhow::Result<PaymentProcessorIdentifier> {
+async fn call_payment_processor<'a>(state: &'a Arc<AppState>, (correlation_id, amount, requested_at): &QueueEvent) -> anyhow::Result<&'a PaymentProcessorIdentifier> {
 
     let payment_processor = state.preferred_payment_processor();
 
     if payment_processor.failing() {
-        let state = state.clone();
-        let (correlation_id, amount, requested_at) = (correlation_id.clone(), *amount, requested_at.clone());
-        tokio::spawn(async move {
-            _ = update_preferred_payment_processor(&state).await;
-            state.send_event((correlation_id, amount, requested_at)).await;
-        });
+        _ = update_preferred_payment_processor(&state);
+        state.send_event((correlation_id.clone(), *amount, *requested_at)).await;
         return Err(anyhow::Error::msg("Payment processor is failing"));
     }
 
@@ -480,27 +472,19 @@ async fn call_payment_processor(state: &Arc<AppState>, (correlation_id, amount, 
     let response_status = response.status().as_u16();
 
     if response_status >= 400 && response_status < 500 {
+        eprintln!("Got 4xx error: {response_status} - {}", response.text().await?);
         return Err(anyhow::Error::msg("Payment processor returned error"));
     }
 
     if response.status().as_u16() >= 500 {
-        let (correlation_id, amount, requested_at) = (correlation_id.clone(), *amount, requested_at.clone());
-        let state_async = state.clone();
-        let id_async = id.clone();
-        tokio::spawn(async move {
-            _ = update_payment_processor_state(&state_async, id_async, Some(true), Some(elapsed.as_secs_f64())).await;
-            _ = update_preferred_payment_processor(&state_async).await;
-            state_async.send_event((correlation_id, amount, requested_at)).await;
-        });
+        _ = update_payment_processor_state(&state, id, Some(true), Some(elapsed.as_secs_f64()));
+        _ = update_preferred_payment_processor(&state);
+        state.send_event((correlation_id.clone(), *amount, *requested_at)).await;
         return Err(anyhow::Error::msg("Payment processor returned error"));
     }
 
-    let state_async = state.clone();
-    let id_async = id.clone();
-    tokio::spawn(async move {
-        _ = update_payment_processor_state(&state_async, id_async, Some(false), Some(elapsed.as_secs_f64())).await;
-        _ = update_preferred_payment_processor(&state_async).await;
-    });
+    _ = update_payment_processor_state(&state, id, Some(false), Some(elapsed.as_secs_f64()));
+    _ = update_preferred_payment_processor(&state);
 
-    Ok(id.clone())
+    Ok(id)
 }
