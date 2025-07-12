@@ -1,4 +1,4 @@
-import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
+// import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
 import { uuidv4 } from "https://jslib.k6.io/k6-utils/1.4.0/index.js";
 import { sleep } from "k6";
 import exec from "k6/execution";
@@ -294,7 +294,7 @@ export function handleSummary(data) {
   };
 
   const result = {
-    stdout: textSummary(data),
+    stdout: JSON.stringify(custom_data, null, 2),
   };
 
   const participant = __ENV.PARTICIPANT;
