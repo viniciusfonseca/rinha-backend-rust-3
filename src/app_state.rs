@@ -1,18 +1,17 @@
-use std::sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering}};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering};
 
-use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, worker::QueueEvent};
+use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::PaymentsStorage, worker::QueueEvent};
 
 pub struct AppState {
-    pub pg_pool: sqlx::PgPool,
     pub tx: tokio::sync::mpsc::Sender<QueueEvent>,
     pub reqwest_client: reqwest::Client,
     pub default_payment_processor: PaymentProcessor,
     pub fallback_payment_processor: PaymentProcessor,
     pub preferred_payment_processor: AtomicU16,
-    pub worker_url: Result<String, std::env::VarError>,
     pub signal_tx: tokio::sync::mpsc::Sender<()>,
     pub queue_len: AtomicI32,
-    pub consuming_payments: AtomicBool
+    pub consuming_payments: AtomicBool,
+    pub storage: PaymentsStorage
 }
 
 impl AppState {

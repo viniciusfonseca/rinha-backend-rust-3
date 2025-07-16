@@ -4,7 +4,6 @@ use axum::{extract::State, Json};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgQueryResult;
 
 use crate::{app_state::AppState, payment_processor::PaymentProcessorIdentifier};
 
@@ -18,34 +17,11 @@ pub async fn events(State(state): State<Arc<AppState>>, Json(payload): Json<Queu
 pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<()> {
     while state.consuming_payments() {
         if let Ok((payment_processor_id, requested_at)) = call_payment_processor(&state, &event).await {
-            insert_payment(&state, &event, payment_processor_id, requested_at).await?;
+            state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
             return Ok(())
         }
     }
     Err(anyhow::Error::msg("Payments are not being consumed"))
-}
-
-const INSERT_STATEMENT: &'static str = "INSERT INTO payments (correlation_id, amount, payment_processor, requested_at) VALUES ($1, $2, $3, $4)";
-
-async fn insert_payment(
-    state: &Arc<AppState>,
-    (correlation_id, amount): &QueueEvent,
-    payment_processor_id: &PaymentProcessorIdentifier,
-    requested_at: DateTime<Utc>
-) -> Result<PgQueryResult, sqlx::Error> {
-
-    let payment_processor = match payment_processor_id {
-        PaymentProcessorIdentifier::Default => "D",
-        PaymentProcessorIdentifier::Fallback => "F",
-    };
-
-    sqlx::query(INSERT_STATEMENT)
-        .bind(correlation_id)
-        .bind(amount)
-        .bind(payment_processor)
-        .bind(requested_at)
-        .execute(&state.pg_pool)
-        .await
 }
 
 #[derive(Deserialize, Debug)]

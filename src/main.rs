@@ -9,6 +9,7 @@ mod app_state;
 mod atomicf64;
 mod payment_processor;
 mod http_api;
+mod storage;
 mod worker;
 
 #[tokio::main]
@@ -20,8 +21,6 @@ async fn main() -> anyhow::Result<()> {
 
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel(1);
 
-    let db_conn_str = std::env::var("DB_CONNECTION_STRING")?;
-    let pg_pool = sqlx::PgPool::connect(&db_conn_str).await?;
     let reqwest_client = reqwest::Client::new();
 
     let default_payment_processor = PaymentProcessor {
@@ -44,23 +43,22 @@ async fn main() -> anyhow::Result<()> {
 
     let preferred_payment_processor = AtomicU16::new(0);
 
-    let worker_url = std::env::var("WORKER_URL");
-
     let queue_len = AtomicI32::new(0);
 
     let consuming_payments = AtomicBool::new(true);
 
+    let storage = storage::PaymentsStorage::new();
+
     let state = Arc::new(AppState {
-        pg_pool,
         tx,
         reqwest_client,
         default_payment_processor,
         fallback_payment_processor,
         preferred_payment_processor,
-        worker_url,
         signal_tx,
         queue_len,
-        consuming_payments
+        consuming_payments,
+        storage,
     });
 
     let state_async_0 = state.clone();
