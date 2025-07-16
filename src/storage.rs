@@ -19,8 +19,10 @@ impl Partition {
 
         csv_writer.serialize(record)?;
 
-        self.writer.write_all(&csv_writer.into_inner()?).await?;
-        self.writer.write(b"\n").await?;
+        let bytes = &mut csv_writer.into_inner()?;
+        bytes.push(b'\n');
+
+        self.writer.write_all(bytes).await?;
         self.writer.flush().await?;
 
         Ok(())
@@ -44,8 +46,11 @@ pub struct PaymentsSummary {
     pub fallback: PaymentsSummaryDetails
 }
 
+const PAYMENTS_STORAGE_PATH: &'static str = "/tmp/payments";
+
 impl PaymentsStorage {
     pub fn new() -> PaymentsStorage {
+        std::fs::create_dir_all(PAYMENTS_STORAGE_PATH).ok();
         PaymentsStorage {
             partitions: dashmap::DashMap::new(),
         }
@@ -61,7 +66,7 @@ impl PaymentsStorage {
                 let (_, writer) = tokio::io::split(tokio::fs::OpenOptions::new()
                     .append(true)
                     .create(true)
-                    .open(format!("payments/{}", partition_key.to_string()))
+                    .open(format!("{PAYMENTS_STORAGE_PATH}/{pk}", pk = partition_key.to_string()))
                     .await?);
 
                 entry.insert(Partition { writer })
@@ -82,7 +87,7 @@ impl PaymentsStorage {
         let mut default = PaymentsSummaryDetails::default();
         let mut fallback = PaymentsSummaryDetails::default();
 
-        let mut partitions = tokio::fs::read_dir("payments").await?;
+        let mut partitions = tokio::fs::read_dir(PAYMENTS_STORAGE_PATH).await?;
         while let Some(entry) = partitions.next_entry().await? {
             let path = entry.path();
             

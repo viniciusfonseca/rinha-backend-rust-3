@@ -18,7 +18,7 @@ services:
       resources:
         limits:
           cpus: "0.35"
-          memory: "15MB"
+          memory: "160MB"
     volumes:
       - api:/tmp
 

@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Instant};
 
-use axum::{extract::State, Json};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -8,11 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::{app_state::AppState, payment_processor::PaymentProcessorIdentifier};
 
 pub type QueueEvent = (String, Decimal);
-
-pub async fn events(State(state): State<Arc<AppState>>, Json(payload): Json<QueueEvent>) -> axum::http::StatusCode {
-    state.send_event(&payload.into()).await;
-    axum::http::StatusCode::ACCEPTED
-}
 
 pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<()> {
     while state.consuming_payments() {
@@ -24,11 +18,19 @@ pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> a
     Err(anyhow::Error::msg("Payments are not being consumed"))
 }
 
-#[derive(Deserialize, Debug)]
+const PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH: &'static str = "/tmp/payment-processor-health-statuses.json";
+
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct PaymentProcessorHealthResponse {
     pub failing: bool,
     pub min_response_time: f64
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct PaymentProcessorHealthStatuses {
+    default: PaymentProcessorHealthResponse,
+    fallback: PaymentProcessorHealthResponse
 }
 
 pub async fn update_payment_processor_health(state: &Arc<AppState>, payment_processor_id: PaymentProcessorIdentifier) -> anyhow::Result<()> {
@@ -52,6 +54,40 @@ pub async fn update_payment_processor_health(state: &Arc<AppState>, payment_proc
     payment_processor.update_min_response_time(response.min_response_time);
     payment_processor.update_efficiency((1000.0 / f64::max(response.min_response_time, 1.0)) / payment_processor.tax);
 
+    write_payment_processor_health_statuses_to_file(&state).await?;
+
+    Ok(())
+}
+
+pub async fn update_payment_processor_health_statuses_from_file(state: &Arc<AppState>) -> anyhow::Result<PaymentProcessorHealthStatuses> {
+    let data = tokio::fs::read_to_string(PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH).await?;
+    let statuses: PaymentProcessorHealthStatuses = serde_json::from_str(&data)?;
+
+    state.update_payment_processor_state(&PaymentProcessorIdentifier::Default, Some(statuses.default.failing), Some(statuses.default.min_response_time));
+    state.update_payment_processor_state(&PaymentProcessorIdentifier::Fallback, Some(statuses.fallback.failing), Some(statuses.fallback.min_response_time));
+
+    if state.update_preferred_payment_processor().is_ok() {
+        state.update_consuming_payments(true);
+    }
+
+    Ok(statuses)
+}
+
+pub async fn write_payment_processor_health_statuses_to_file(state: &Arc<AppState>) -> anyhow::Result<()> {
+    let statuses = PaymentProcessorHealthStatuses {
+        default: PaymentProcessorHealthResponse {
+            failing: state.default_payment_processor.failing(),
+            min_response_time: state.default_payment_processor.min_response_time()
+        },
+        fallback: PaymentProcessorHealthResponse {
+            failing: state.fallback_payment_processor.failing(),
+            min_response_time: state.fallback_payment_processor.min_response_time()
+        }
+    };
+
+    let json = serde_json::to_string(&statuses)?;
+    tokio::fs::write(PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH, json).await?;
+    
     Ok(())
 }
 
