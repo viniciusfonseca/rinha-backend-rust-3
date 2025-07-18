@@ -2,23 +2,22 @@ services:
   api01: &api
     build: .
     hostname: api01
-    depends_on:
-      - api03
-      - db
     networks:
+      - payment-processor
       - backend
     expose:
       - 8080
     environment:
       NODE: 1
       TCP_LISTEN: "0.0.0.0:8080"
+      WORKER_MAX_THREADS: 1400
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:
       resources:
         limits:
           cpus: "0.35"
-          memory: "160MB"
+          memory: "125MB"
     volumes:
       - api:/tmp
 
@@ -48,7 +47,7 @@ services:
       resources:
         limits:
           cpus: '0.8'
-          memory: '30MB'
+          memory: '120MB'
 
 networks:
   backend:

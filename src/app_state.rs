@@ -32,7 +32,9 @@ impl AppState {
         }
     }
     pub async fn send_event(&self, event: &QueueEvent) {
-        _ = self.tx.send(event.clone()).await;
+        if let Err(e) = self.tx.send(event.clone()).await {
+            println!("Failed to send event: {}", e);
+        }
         self.queue_len.fetch_add(1, Ordering::Relaxed);
     }
 

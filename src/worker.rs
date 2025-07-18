@@ -66,10 +66,6 @@ pub async fn update_payment_processor_health_statuses_from_file(state: &Arc<AppS
     state.update_payment_processor_state(&PaymentProcessorIdentifier::Default, Some(statuses.default.failing), Some(statuses.default.min_response_time));
     state.update_payment_processor_state(&PaymentProcessorIdentifier::Fallback, Some(statuses.fallback.failing), Some(statuses.fallback.min_response_time));
 
-    if state.update_preferred_payment_processor().is_ok() {
-        state.update_consuming_payments(true);
-    }
-
     Ok(statuses)
 }
 

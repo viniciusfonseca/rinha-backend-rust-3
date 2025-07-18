@@ -64,22 +64,12 @@ async fn main() -> anyhow::Result<()> {
 
     let state_async_0 = state.clone();
     let state_async_1 = state.clone();
-    
-    let app = Router::new()
-        .route("/payments", routing::post(http_api::payments))
-        .route("/payments-summary", routing::get(http_api::payments_summary))
-        .route("/purge-payments", routing::post(http_api::purge_payments))
-        .with_state(state);
-
-    let tcp_listen = std::env::var("TCP_LISTEN")?;
-    let listener = tokio::net::TcpListener::bind(tcp_listen).await?;
-
-    axum::serve(listener, app).await?;
 
     tokio::spawn(async move {
         println!("Starting queue processor");
         loop {
-            let worker_max_threads = std::env::var("WORKER_MAX_THREADS").unwrap_or("500".to_string()).parse().unwrap();
+            let worker_max_threads = std::env::var("WORKER_MAX_THREADS")
+                .unwrap_or("500".to_string()).parse().unwrap();
             let semaphore = Arc::new(Semaphore::new(worker_max_threads));
             while let Some(event) = rx.recv().await {
                 state_async_0.queue_len.fetch_add(-1, Ordering::Relaxed);
@@ -100,33 +90,52 @@ async fn main() -> anyhow::Result<()> {
             }
             if is_primary_node {
                 signal_rx.recv().await;
+                continue;
             }
-            else {
-                loop {
-                    worker::update_payment_processor_health_statuses_from_file(&state_async_0).await.unwrap();
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
+            while !state_async_0.consuming_payments() {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
         }
     });
     if is_primary_node {
         tokio::spawn(async move {
             println!("Starting health updater");
+            let health_status_update_period = if is_primary_node {
+                std::time::Duration::from_millis(5005)
+            } else {
+                std::time::Duration::from_millis(500)
+            };
             loop {
-                _ = tokio::join! {
-                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
-                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
-                };
+                if is_primary_node {
+                    _ = tokio::join! {
+                        worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
+                        worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
+                    };
+                }
+                else {
+                    _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+                }
                 let update_result = &state_async_1.update_preferred_payment_processor();
                 if !state_async_1.consuming_payments() && update_result.is_ok() {
                     _ = state_async_1.signal_tx.send(()).await;
                     println!("One of the payment processors is healthy. Start consuming payments");
                     state_async_1.update_consuming_payments(true);
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(5005)).await;
+                tokio::time::sleep(health_status_update_period).await;
             }
         });
     }
+
+    let app = Router::new()
+        .route("/payments", routing::post(http_api::payments))
+        .route("/payments-summary", routing::get(http_api::payments_summary))
+        .route("/purge-payments", routing::post(http_api::purge_payments))
+        .with_state(state);
+
+    let tcp_listen = std::env::var("TCP_LISTEN")?;
+    let listener = tokio::net::TcpListener::bind(tcp_listen).await?;
+
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

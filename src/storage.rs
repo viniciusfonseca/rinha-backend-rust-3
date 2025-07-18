@@ -17,20 +17,17 @@ impl Partition {
         let record = (correlation_id.to_string(), amount, payment_processor_id.to_string(), requested_at);
         let mut csv_writer = csv::Writer::from_writer(vec![]);
 
-        csv_writer.serialize(record)?;
+        csv_writer.serialize(&record)?;
 
-        let bytes = &mut csv_writer.into_inner()?;
-        bytes.push(b'\n');
-
-        self.writer.write_all(bytes).await?;
-        self.writer.flush().await?;
+        self.writer.write_all(&mut csv_writer.into_inner()?).await?;
 
         Ok(())
     }
 }
 
 pub struct PaymentsStorage {
-    partitions: dashmap::DashMap<i64, Partition>,
+    partitions: scc::HashMap<i64, Partition>,
+    first_access_locks: scc::HashMap<i64, tokio::sync::Mutex<()>>
 }
 
 #[derive(Serialize, Default, Debug)]
@@ -52,33 +49,47 @@ impl PaymentsStorage {
     pub fn new() -> PaymentsStorage {
         std::fs::create_dir_all(PAYMENTS_STORAGE_PATH).ok();
         PaymentsStorage {
-            partitions: dashmap::DashMap::new(),
+            partitions: scc::HashMap::new(),
+            first_access_locks: scc::HashMap::new()
         }
+    }
+
+    pub async fn create_partition(&self, partition_key: i64) -> Partition {
+        let file_path = format!("{}/{}", PAYMENTS_STORAGE_PATH, partition_key);
+        let file_options = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .await
+            .expect("Failed to open or create partition file");
+        let (_, writer) = tokio::io::split(file_options);
+        Partition { writer }
     }
 
     pub async fn insert_payment(&self, (correlation_id, amount): &QueueEvent, payment_processor_id: &PaymentProcessorIdentifier, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
 
         let partition_key = requested_at.timestamp_millis() / 1000; // Partition by second
-
-        let mut partition = match self.partitions.entry(partition_key) {
-            dashmap::mapref::entry::Entry::Occupied(entry) => entry.into_ref(),
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                let (_, writer) = tokio::io::split(tokio::fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(format!("{PAYMENTS_STORAGE_PATH}/{pk}", pk = partition_key.to_string()))
-                    .await?);
-
-                entry.insert(Partition { writer })
-            }
-        };
-
         let payment_processor = match payment_processor_id {
             PaymentProcessorIdentifier::Default => "D",
             PaymentProcessorIdentifier::Fallback => "F",
         };
 
-        partition.write(&correlation_id, *amount, payment_processor, requested_at).await?;
+        if let Some(mut partition) = self.partitions.get_async(&partition_key).await {
+            partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
+            return Ok(())
+        }
+
+        let lock = self.first_access_locks.entry(partition_key).or_insert_with(|| tokio::sync::Mutex::new(()));
+        let _guard = lock.lock().await;
+
+        if let Some(mut partition) = self.partitions.get_async(&partition_key).await {
+            partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
+        }
+        else {
+            let mut partition = self.create_partition(partition_key).await;
+            partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
+            _ = self.partitions.insert_async(partition_key, partition);
+        }
 
         Ok(())
     }
