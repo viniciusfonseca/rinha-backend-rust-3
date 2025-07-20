@@ -47,7 +47,7 @@ services:
       - payment-processor
     environment:
       NODE: 3
-      WORKER_MAX_THREADS: 1500
+      WORKER_MAX_THREADS: 6000
       TCP_LISTEN: "0.0.0.0:8082"
       DB_CONNECTION_STRING: postgres://postgres:1234@db:5432/rinhadb
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080

@@ -9,6 +9,7 @@ mod app_state;
 mod atomicf64;
 mod payment_processor;
 mod http_api;
+mod storage;
 mod worker;
 
 #[tokio::main]
@@ -50,6 +51,8 @@ async fn main() -> anyhow::Result<()> {
 
     let consuming_payments = AtomicBool::new(true);
 
+    let storage = storage::PaymentsStorage;
+
     let state = Arc::new(AppState {
         pg_pool,
         tx,
@@ -60,7 +63,8 @@ async fn main() -> anyhow::Result<()> {
         worker_url,
         signal_tx,
         queue_len,
-        consuming_payments
+        consuming_payments,
+        storage
     });
 
     let state_async_0 = state.clone();
