@@ -93,38 +93,36 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
             while !state_async_0.consuming_payments() {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
         }
     });
-    if is_primary_node {
-        tokio::spawn(async move {
-            println!("Starting health updater");
-            let health_status_update_period = if is_primary_node {
-                std::time::Duration::from_millis(5005)
-            } else {
-                std::time::Duration::from_millis(500)
-            };
-            loop {
-                if is_primary_node {
-                    _ = tokio::join! {
-                        worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
-                        worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
-                    };
-                }
-                else {
-                    _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
-                }
-                let update_result = &state_async_1.update_preferred_payment_processor();
-                if !state_async_1.consuming_payments() && update_result.is_ok() {
-                    _ = state_async_1.signal_tx.send(()).await;
-                    println!("One of the payment processors is healthy. Start consuming payments");
-                    state_async_1.update_consuming_payments(true);
-                }
-                tokio::time::sleep(health_status_update_period).await;
+    tokio::spawn(async move {
+        println!("Starting health updater");
+        let health_status_update_period = if is_primary_node {
+            tokio::time::Duration::from_millis(5005)
+        } else {
+            tokio::time::Duration::from_millis(500)
+        };
+        loop {
+            if is_primary_node {
+                _ = tokio::join! {
+                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
+                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
+                };
             }
-        });
-    }
+            else {
+                _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+            }
+            let update_result = &state_async_1.update_preferred_payment_processor();
+            if !state_async_1.consuming_payments() && update_result.is_ok() {
+                _ = state_async_1.signal_tx.send(()).await;
+                println!("One of the payment processors is healthy. Start consuming payments");
+                state_async_1.update_consuming_payments(true);
+            }
+            tokio::time::sleep(health_status_update_period).await;
+        }
+    });
 
     let app = Router::new()
         .route("/payments", routing::post(http_api::payments))

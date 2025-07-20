@@ -10,9 +10,14 @@ pub type QueueEvent = (String, Decimal);
 
 pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<()> {
     while state.consuming_payments() {
-        if let Ok((payment_processor_id, requested_at)) = call_payment_processor(&state, &event).await {
-            state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
-            return Ok(())
+        match call_payment_processor(&state, &event).await {
+            Ok((payment_processor_id, requested_at)) => {
+                state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
+                return Ok(())
+            }
+            Err(e) => {
+                println!("Error at call_payment_processor: {}", e);
+            }
         }
     }
     Err(anyhow::Error::msg("Payments are not being consumed"))
@@ -60,8 +65,8 @@ pub async fn update_payment_processor_health(state: &Arc<AppState>, payment_proc
 }
 
 pub async fn update_payment_processor_health_statuses_from_file(state: &Arc<AppState>) -> anyhow::Result<PaymentProcessorHealthStatuses> {
-    let data = tokio::fs::read_to_string(PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH).await?;
-    let statuses: PaymentProcessorHealthStatuses = serde_json::from_str(&data)?;
+    let data = tokio::fs::read(PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH).await?;
+    let statuses: PaymentProcessorHealthStatuses = serde_json::from_slice(&data)?;
 
     state.update_payment_processor_state(&PaymentProcessorIdentifier::Default, Some(statuses.default.failing), Some(statuses.default.min_response_time));
     state.update_payment_processor_state(&PaymentProcessorIdentifier::Fallback, Some(statuses.fallback.failing), Some(statuses.fallback.min_response_time));

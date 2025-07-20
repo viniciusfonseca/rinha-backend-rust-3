@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, time::Instant};
 
 use crate::{payment_processor::PaymentProcessorIdentifier, worker::QueueEvent};
 
@@ -14,12 +14,12 @@ type PartitionRecord = (String, Decimal, String, DateTime<Utc>);
 impl Partition {
     pub async fn write(&mut self, correlation_id: &str, amount: Decimal, payment_processor_id: &str, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
 
-        let record = (correlation_id.to_string(), amount, payment_processor_id.to_string(), requested_at);
-        let mut csv_writer = csv::Writer::from_writer(vec![]);
+        // let record = (correlation_id.to_string(), amount, payment_processor_id.to_string(), requested_at);
 
-        csv_writer.serialize(&record)?;
+        // let bytes = format!("{},{},{},{}\n", correlation_id, amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
+        // self.writer.write_all(&bytes).await?;
 
-        self.writer.write_all(&mut csv_writer.into_inner()?).await?;
+        // self.writer.write(&mut csv_writer.into_inner()?).await?;
 
         Ok(())
     }
@@ -55,7 +55,7 @@ impl PaymentsStorage {
     }
 
     pub async fn create_partition(&self, partition_key: i64) -> Partition {
-        let file_path = format!("{}/{}", PAYMENTS_STORAGE_PATH, partition_key);
+        let file_path = format!("{PAYMENTS_STORAGE_PATH}/{partition_key}");
         let file_options = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)

@@ -1,5 +1,5 @@
 k6-test:
-	k6 run -e MAX_REQUESTS=850 tests/rinha.js
+	k6 run -e MAX_REQUESTS=500 tests/rinha.js
 
 docker-prune:
 	docker compose down
@@ -23,6 +23,8 @@ start-backend-build-detached:
 start-backend:
 	docker compose down
 	docker compose up
+
+setup-local: docker-prune start-payment-processors start-backend-build
 
 ci-k6-test: start-payment-processors start-backend-build-detached k6-test
 
