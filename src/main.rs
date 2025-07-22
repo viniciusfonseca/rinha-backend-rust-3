@@ -2,6 +2,7 @@
 use std::sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering}, Arc};
 use axum::{routing, Router};
 use tokio::sync::Semaphore;
+// use tokio::sync::Semaphore;
 
 use crate::{app_state::AppState, atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}};
 
@@ -50,6 +51,8 @@ async fn main() -> anyhow::Result<()> {
 
     let storage = storage::PaymentsStorage::new();
 
+    let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(50000);
+
     let state = Arc::new(AppState {
         tx,
         reqwest_client,
@@ -60,10 +63,12 @@ async fn main() -> anyhow::Result<()> {
         queue_len,
         consuming_payments,
         storage,
+        batch_tx,
     });
 
     let state_async_0 = state.clone();
     let state_async_1 = state.clone();
+    let state_async_2 = state.clone();
 
     tokio::spawn(async move {
         println!("Starting queue processor");
@@ -97,32 +102,51 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
     tokio::spawn(async move {
-        println!("Starting health updater");
-        let health_status_update_period = if is_primary_node {
-            tokio::time::Duration::from_millis(5005)
-        } else {
-            tokio::time::Duration::from_millis(500)
-        };
+        println!("Starting batch processor");
         loop {
-            if is_primary_node {
-                _ = tokio::join! {
-                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
-                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
-                };
+            let mut records = Vec::new();
+            // if no records are received, wait for a short period
+            if batch_rx.is_empty() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                continue;
             }
-            else {
-                _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+            while let Some(record) = batch_rx.recv().await {
+                records.push(record);
             }
-            let update_result = &state_async_1.update_preferred_payment_processor();
-            if !state_async_1.consuming_payments() && update_result.is_ok() {
-                _ = state_async_1.signal_tx.send(()).await;
-                println!("One of the payment processors is healthy. Start consuming payments");
-                state_async_1.update_consuming_payments(true);
-            }
-            tokio::time::sleep(health_status_update_period).await;
+
+            _ = state_async_2.storage.batch_insert(&records).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     });
+
+    // tokio::spawn(async move {
+    //     println!("Starting health updater");
+    //     let health_status_update_period = if is_primary_node {
+    //         tokio::time::Duration::from_millis(5005)
+    //     } else {
+    //         tokio::time::Duration::from_millis(500)
+    //     };
+    //     loop {
+    //         if is_primary_node {
+    //             _ = tokio::join! {
+    //                 worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
+    //                 worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
+    //             };
+    //         }
+    //         else {
+    //             _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+    //         }
+    //         let update_result = &state_async_1.update_preferred_payment_processor();
+    //         if !state_async_1.consuming_payments() && update_result.is_ok() {
+    //             _ = state_async_1.signal_tx.send(()).await;
+    //             println!("One of the payment processors is healthy. Start consuming payments");
+    //             state_async_1.update_consuming_payments(true);
+    //         }
+    //         tokio::time::sleep(health_status_update_period).await;
+    //     }
+    // });
 
     let app = Router::new()
         .route("/payments", routing::post(http_api::payments))

@@ -7,6 +7,14 @@ pub enum PaymentProcessorIdentifier {
     Default,
     Fallback,
 }
+impl ToString for PaymentProcessorIdentifier {
+    fn to_string(&self) -> String {
+        match self {
+            PaymentProcessorIdentifier::Default => "default".to_string(),
+            PaymentProcessorIdentifier::Fallback => "fallback".to_string(),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct PaymentProcessor {

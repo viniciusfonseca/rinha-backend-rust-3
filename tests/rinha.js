@@ -322,7 +322,7 @@ export function handleSummary(data) {
   };
 
   const result = {
-    stdout: textSummary(data),
+    stdout: JSON.stringify(custom_data, null, 2)
   };
 
   const participant = __ENV.PARTICIPANT;

@@ -12,7 +12,9 @@ pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> a
     while state.consuming_payments() {
         match call_payment_processor(&state, &event).await {
             Ok((payment_processor_id, requested_at)) => {
-                state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
+                // state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
+                // partition.write(&event.0, event.1, &payment_processor_id.to_string(), requested_at).await?;
+                state.batch_tx.send((event.0.clone(), event.1, payment_processor_id.to_string(), requested_at)).await?;
                 return Ok(())
             }
             Err(e) => {
@@ -118,14 +120,16 @@ async fn call_payment_processor<'a>(state: &'a Arc<AppState>, (correlation_id, a
         amount: *amount,
         requested_at,
     };
+
+    let partition_key = requested_at.timestamp_millis() / 1000;
     
     let start = Instant::now();
     let response = state.reqwest_client
-        .post(format!("{url}/payments"))
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(&body)?)
-        .send()
-        .await?;
+            .post(format!("{url}/payments"))
+            .header("Content-Type", "application/json")
+            .body(serde_json::to_string(&body)?)
+            .send()
+            .await?;
     let elapsed = start.elapsed();
 
     let response_status = response.status().as_u16();

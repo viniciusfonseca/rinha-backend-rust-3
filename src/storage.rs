@@ -1,7 +1,10 @@
+
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
-use tokio::{io::AsyncWriteExt, time::Instant};
+use tokio::io::AsyncWriteExt;
 
 use crate::{payment_processor::PaymentProcessorIdentifier, worker::QueueEvent};
 
@@ -9,17 +12,18 @@ pub struct Partition {
     writer: tokio::io::WriteHalf<tokio::fs::File>,
 }
 
-type PartitionRecord = (String, Decimal, String, DateTime<Utc>);
+pub type PartitionRecord = (String, Decimal, String, DateTime<Utc>);
 
 impl Partition {
     pub async fn write(&mut self, correlation_id: &str, amount: Decimal, payment_processor_id: &str, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
 
-        // let record = (correlation_id.to_string(), amount, payment_processor_id.to_string(), requested_at);
+        let record = (correlation_id.to_string(), amount, payment_processor_id.to_string(), requested_at);
+        let mut csv_writer = csv::Writer::from_writer(vec![]);
 
-        // let bytes = format!("{},{},{},{}\n", correlation_id, amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
-        // self.writer.write_all(&bytes).await?;
+        csv_writer.serialize(record)?;
 
-        // self.writer.write(&mut csv_writer.into_inner()?).await?;
+        self.writer.write(&mut csv_writer.into_inner()?).await?;
+        self.writer.flush().await?;
 
         Ok(())
     }
@@ -45,6 +49,8 @@ pub struct PaymentsSummary {
 
 const PAYMENTS_STORAGE_PATH: &'static str = "/tmp/payments";
 
+pub type PartitionEntry<'a> = scc::hash_map::OccupiedEntry<'a, i64, Partition>;
+
 impl PaymentsStorage {
     pub fn new() -> PaymentsStorage {
         std::fs::create_dir_all(PAYMENTS_STORAGE_PATH).ok();
@@ -54,7 +60,19 @@ impl PaymentsStorage {
         }
     }
 
-    pub async fn create_partition(&self, partition_key: i64) -> Partition {
+    pub async fn get_partition(&self, partition_key: i64) -> Partition {
+
+        // if let Some(partition) = self.partitions.get_async(&partition_key).await {
+        //     return partition;
+        // }
+
+        // let lock = self.first_access_locks.entry(partition_key).or_insert_with(|| tokio::sync::Mutex::new(()));
+        // let _guard = lock.lock().await;
+
+        // if let Some(partition) = self.partitions.get_async(&partition_key).await {
+        //     return partition;
+        // }
+
         let file_path = format!("{PAYMENTS_STORAGE_PATH}/{partition_key}");
         let file_options = tokio::fs::OpenOptions::new()
             .create(true)
@@ -64,32 +82,46 @@ impl PaymentsStorage {
             .expect("Failed to open or create partition file");
         let (_, writer) = tokio::io::split(file_options);
         Partition { writer }
+        // let partition = Partition { writer };
+        // _ = self.partitions.insert_async(partition_key, partition).await;
+        // self.partitions.get_async(&partition_key).await.unwrap()
     }
 
     pub async fn insert_payment(&self, (correlation_id, amount): &QueueEvent, payment_processor_id: &PaymentProcessorIdentifier, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
 
         let partition_key = requested_at.timestamp_millis() / 1000; // Partition by second
-        let payment_processor = match payment_processor_id {
+        let payment_processor_id = match payment_processor_id {
             PaymentProcessorIdentifier::Default => "D",
             PaymentProcessorIdentifier::Fallback => "F",
         };
 
-        if let Some(mut partition) = self.partitions.get_async(&partition_key).await {
-            partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
-            return Ok(())
-        }
+        // if let Some(mut partition) = self.partitions.get_async(&partition_key).await {
+        //     partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
+        //     return Ok(())
+        // }
 
-        let lock = self.first_access_locks.entry(partition_key).or_insert_with(|| tokio::sync::Mutex::new(()));
-        let _guard = lock.lock().await;
+        // let lock = self.first_access_locks.entry(partition_key).or_insert_with(|| tokio::sync::Mutex::new(()));
+        // let _guard = lock.lock().await;
 
-        if let Some(mut partition) = self.partitions.get_async(&partition_key).await {
-            partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
-        }
-        else {
-            let mut partition = self.create_partition(partition_key).await;
-            partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
-            _ = self.partitions.insert_async(partition_key, partition);
-        }
+        // if let Some(mut partition) = self.partitions.get_async(&partition_key).await {
+        //     partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
+        // }
+        // else {
+        //     let mut partition = self.create_partition(partition_key).await;
+        //     partition.write(correlation_id, *amount, payment_processor, requested_at).await?;
+        //     _ = self.partitions.insert_async(partition_key, partition);
+        // }
+
+        let bytes = format!("{},{},{},{}\n", correlation_id, amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
+
+        let file_path = format!("{PAYMENTS_STORAGE_PATH}/{partition_key}");
+        tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .await?
+            .write_all(&bytes)
+            .await?;
 
         Ok(())
     }
@@ -127,4 +159,40 @@ impl PaymentsStorage {
 
         Ok(PaymentsSummary { default, fallback })
     }
+
+    pub async fn batch_insert(&self, records: &Vec<PartitionRecord>) -> anyhow::Result<()> {
+        
+        let mut partitions: HashMap<i64, BatchInsert> = HashMap::new();
+
+        for record in records {
+            let partition_key = record.3.timestamp_millis() / 1000; // Partition by second
+            let entry = partitions.entry(partition_key).or_insert_with(|| BatchInsert {
+                partition_key,
+                data: Vec::new(),
+            });
+            let record = format!("{},{},{},{}\n", record.0, record.1, record.2, record.3.to_rfc3339());
+            entry.data = [&entry.data, record.as_bytes()].concat();
+        }
+
+        for (partition_key, partition) in partitions {
+            let file_path = format!("{PAYMENTS_STORAGE_PATH}/{partition_key}");
+            let mut file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file_path)
+                .await
+                .expect("Failed to open or create partition file");
+            file.write_all(&partition.data).await?;
+            file.flush().await?;
+
+            println!("Batch inserted {} records into partition {}", partition.data.len(), partition_key);
+        }
+
+        Ok(())
+    }
+}
+
+struct BatchInsert {
+    pub partition_key: i64,
+    pub data: Vec<u8>,
 }

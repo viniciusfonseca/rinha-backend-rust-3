@@ -15,13 +15,7 @@ pub struct PaymentPayload {
 }
 
 pub async fn payments(State(state): State<Arc<AppState>>, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
-    tokio::spawn(async move {
-        state.send_event(&(payload.correlation_id, payload.amount)).await;
-    });
-    // let fd_count = procfs::process::Process::myself()
-    //     .and_then(|p| p.fd_count())
-    //     .unwrap_or(0);
-    // println!("open files: {fd_count}");
+    state.send_event(&(payload.correlation_id, payload.amount)).await;
     axum::http::StatusCode::ACCEPTED
 }
 
@@ -31,7 +25,14 @@ pub async fn purge_payments(State(_): State<Arc<AppState>>) -> axum::http::Statu
 
 pub async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> impl IntoResponse {
 
-    state.storage.get_summary(&params.get("from").unwrap_or(&Utc::now()), &params.get("to").unwrap_or(&Utc::now())).await
-        .map(|summary| Json(summary))
-        .unwrap_or_else(|_| Json(PaymentsSummary::default()))
+    match state.storage.get_summary(
+        &params.get("from").unwrap_or(&Utc::now()),
+        &params.get("to").unwrap_or(&Utc::now())
+    ).await {
+        Ok(summary) => Json(summary),
+        Err(e) => {
+            println!("Error at payments_summary: {e}");
+            Json(PaymentsSummary::default())
+        }
+    }
 }
