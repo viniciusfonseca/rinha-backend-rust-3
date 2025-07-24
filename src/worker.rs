@@ -16,7 +16,7 @@ pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> a
                 return Ok(())
             }
             Err(e) => {
-                println!("Error at call_payment_processor: {}", e);
+                // println!("Error at call_payment_processor: {}", e);
             }
         }
     }

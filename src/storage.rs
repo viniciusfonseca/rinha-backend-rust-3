@@ -1,7 +1,10 @@
 
 use chrono::{DateTime, Utc};
+use tokio_stream::StreamExt;
 use rust_decimal::Decimal;
 use serde::Serialize;
+use tokio::fs::File;
+use tokio::io::BufReader;
 
 pub type StorageRecord = (Decimal, String, DateTime<Utc>);
 
@@ -27,25 +30,31 @@ pub async fn get_summary(from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Re
     let mut default = PaymentsSummaryDetails::default();
     let mut fallback = PaymentsSummaryDetails::default();
 
-    let data = tokio::fs::read(PAYMENTS_STORAGE_PATH_DATA).await?;
-    let mut csv_reader = csv::ReaderBuilder::new()
-        .has_headers(false)
-        .from_reader(data.as_slice());
+    let file = match File::open(PAYMENTS_STORAGE_PATH_DATA).await {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PaymentsSummary::default());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let reader = BufReader::new(file);
 
-    for record in csv_reader.deserialize() {
+    let mut csv_deserializer = csv_async::AsyncReaderBuilder::new()
+        .has_headers(false)
+        .create_deserializer(reader);
+
+    let mut records = csv_deserializer.deserialize::<StorageRecord>();
+
+    while let Some(record) = records.next().await {
         let (amount, payment_processor_id, requested_at): StorageRecord = record?;
         if requested_at > *from && requested_at < *to {
-            match payment_processor_id.as_str() {
-                "D" => {
-                    default.total_requests += 1;
-                    default.total_amount += amount;
-                },
-                "F" => {
-                    fallback.total_requests += 1;
-                    fallback.total_amount += amount;
-                },
-                _ => (),
-            }
+            let summary_details = match payment_processor_id.as_str() {
+                "D" => &mut default,
+                "F" => &mut fallback,
+                _ => continue,
+            };
+            summary_details.total_requests += 1;
+            summary_details.total_amount += amount;
         }
     }
 

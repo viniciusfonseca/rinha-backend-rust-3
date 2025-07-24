@@ -1,6 +1,7 @@
 
-use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
+use std::{sync::{atomic::{AtomicBool, AtomicU16}, Arc}, time::Instant};
 use axum::{routing, Router};
+use chrono::Utc;
 use tokio::{io::AsyncWriteExt, sync::Semaphore};
 
 use crate::{app_state::AppState, atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::{PAYMENTS_STORAGE_PATH, PAYMENTS_STORAGE_PATH_DATA}};
@@ -79,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::spawn(async move {
                     let _p = permit;
                     if let Err(e) = worker::process_queue_event(&state_async_0, &event).await {
-                        eprintln!("Failed to process queue event: {e}");
+                        // eprintln!("Failed to process queue event: {e}");
                         state_async_0.send_event(&event).await;
                     }
                 });
@@ -99,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .expect("Failed to open or create partition file");
 
+        let mut records = 0;
         let mut bufwriter = tokio::io::BufWriter::new(file);
 
         let mut flush_ticker = tokio::time::interval(tokio::time::Duration::from_millis(30));
@@ -113,9 +115,17 @@ async fn main() -> anyhow::Result<()> {
                 Some((amount, payment_processor_id, requested_at)) = batch_rx.recv() => {
                     let bytes = format!("{},{},{}\n", amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
                     bufwriter.write_all(&bytes).await.expect("Failed to write to file");
+                    records += 1;
                 },
                 _ = flush_ticker.tick() => {
+                    if bufwriter.buffer().is_empty() {
+                        continue;
+                    }
+                    let start = Instant::now();
                     bufwriter.flush().await.expect("Failed to flush file");
+                    let elapsed = start.elapsed().as_millis();
+                    println!("Flushed {records} records in {}ms at {}", elapsed, Utc::now().to_rfc3339());
+                    records = 0;
                 },
                 _ = health_update_ticker.tick() => {
                     if is_primary_node {
