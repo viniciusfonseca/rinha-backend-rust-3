@@ -10,7 +10,7 @@ services:
     environment:
       NODE: 1
       TCP_LISTEN: "0.0.0.0:8080"
-      WORKER_MAX_THREADS: 32
+      WORKER_MAX_THREADS: 64
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:
@@ -32,7 +32,7 @@ services:
     environment:
       NODE: 2
       TCP_LISTEN: "0.0.0.0:8081"
-      WORKER_MAX_THREADS: 32
+      WORKER_MAX_THREADS: 64
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
 
