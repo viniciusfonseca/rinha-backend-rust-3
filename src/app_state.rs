@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::StorageRecord, worker::QueueEvent};
 
@@ -9,7 +9,6 @@ pub struct AppState {
     pub fallback_payment_processor: PaymentProcessor,
     pub preferred_payment_processor: AtomicU16,
     pub signal_tx: tokio::sync::mpsc::Sender<()>,
-    pub queue_len: AtomicI32,
     pub consuming_payments: AtomicBool,
     pub batch_tx: tokio::sync::mpsc::Sender<StorageRecord>,
 }
@@ -35,7 +34,6 @@ impl AppState {
         if let Err(e) = self.tx.send(event.clone()).await {
             println!("Failed to send event: {}", e);
         }
-        self.queue_len.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn update_payment_processor_state(

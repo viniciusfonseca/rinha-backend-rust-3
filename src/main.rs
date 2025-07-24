@@ -1,10 +1,9 @@
 
-use std::sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering}, Arc};
+use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 use axum::{routing, Router};
 use tokio::{io::AsyncWriteExt, sync::Semaphore};
-// use tokio::sync::Semaphore;
 
-use crate::{app_state::AppState, atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::{PAYMENTS_STORAGE_PATH, PAYMENTS_STORAGE_PATH_DATA}, worker::update_payment_processor_health_statuses_from_file};
+use crate::{app_state::AppState, atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::{PAYMENTS_STORAGE_PATH, PAYMENTS_STORAGE_PATH_DATA}};
 
 mod app_state;
 mod atomicf64;
@@ -45,8 +44,6 @@ async fn main() -> anyhow::Result<()> {
 
     let preferred_payment_processor = AtomicU16::new(0);
 
-    let queue_len = AtomicI32::new(0);
-
     let consuming_payments = AtomicBool::new(true);
 
     let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(50000);
@@ -58,7 +55,6 @@ async fn main() -> anyhow::Result<()> {
         fallback_payment_processor,
         preferred_payment_processor,
         signal_tx,
-        queue_len,
         consuming_payments,
         batch_tx,
     });
@@ -73,7 +69,6 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or("500".to_string()).parse().unwrap();
             let semaphore = Arc::new(Semaphore::new(worker_max_threads));
             while let Some(event) = rx.recv().await {
-                state_async_0.queue_len.fetch_add(-1, Ordering::Relaxed);
                 if !state_async_0.consuming_payments() {
                     state_async_0.send_event(&event).await;
                     println!("Both payment processors are failing. Break event consumer loop");
@@ -89,14 +84,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 });
             }
-            if is_primary_node {
-                signal_rx.recv().await;
-                continue;
-            }
-            while !state_async_0.consuming_payments() {
-                _ = update_payment_processor_health_statuses_from_file(&state_async_0).await;
-                _ = state_async_0.update_preferred_payment_processor();
-            }
+            signal_rx.recv().await;
         }
     });
 
@@ -113,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
 
         let mut bufwriter = tokio::io::BufWriter::new(file);
 
-        let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(30));
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(70));
 
         loop {
             tokio::select! {
