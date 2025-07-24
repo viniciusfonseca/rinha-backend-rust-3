@@ -18,9 +18,9 @@ services:
         limits:
           cpus: "0.35"
           memory: "125MB"
-        reservations:
-          cpus: "0.1"
-          memory: "50MB"
+        # reservations:
+        #   cpus: "0.35"
+        #   memory: "125MB"
     volumes:
       - api:/tmp
 
@@ -52,9 +52,9 @@ services:
         limits:
           cpus: '0.8'
           memory: '120MB'
-        reservations:
-          cpus: '0.1'
-          memory: '50MB'
+        # reservations:
+        #   cpus: '0.8'
+        #   memory: '120MB'
 
 networks:
   backend:

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-use crate::{app_state::AppState, payment_processor::PaymentProcessorIdentifier};
+use crate::{app_state::AppState, payment_processor::PaymentProcessorIdentifier, storage::PAYMENTS_STORAGE_PATH_HEALTH};
 
 pub type QueueEvent = (String, Decimal);
 
@@ -15,6 +15,7 @@ pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> a
                 // state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
                 // partition.write(&event.0, event.1, &payment_processor_id.to_string(), requested_at).await?;
                 state.batch_tx.send((event.0.clone(), event.1, payment_processor_id.to_string(), requested_at)).await?;
+                // state.storage.insert_payment(event, payment_processor_id, requested_at).await?;
                 return Ok(())
             }
             Err(e) => {
@@ -24,8 +25,6 @@ pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> a
     }
     Err(anyhow::Error::msg("Payments are not being consumed"))
 }
-
-const PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH: &'static str = "/tmp/payment-processor-health-statuses.json";
 
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +66,7 @@ pub async fn update_payment_processor_health(state: &Arc<AppState>, payment_proc
 }
 
 pub async fn update_payment_processor_health_statuses_from_file(state: &Arc<AppState>) -> anyhow::Result<PaymentProcessorHealthStatuses> {
-    let data = tokio::fs::read(PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH).await?;
+    let data = tokio::fs::read(PAYMENTS_STORAGE_PATH_HEALTH).await?;
     let statuses: PaymentProcessorHealthStatuses = serde_json::from_slice(&data)?;
 
     state.update_payment_processor_state(&PaymentProcessorIdentifier::Default, Some(statuses.default.failing), Some(statuses.default.min_response_time));
@@ -89,7 +88,7 @@ pub async fn write_payment_processor_health_statuses_to_file(state: &Arc<AppStat
     };
 
     let json = serde_json::to_string(&statuses)?;
-    tokio::fs::write(PAYMENT_PROCESSOR_HEALTH_STATUSES_PATH, json).await?;
+    tokio::fs::write(PAYMENTS_STORAGE_PATH_HEALTH, json).await?;
     
     Ok(())
 }
@@ -121,8 +120,6 @@ async fn call_payment_processor<'a>(state: &'a Arc<AppState>, (correlation_id, a
         requested_at,
     };
 
-    let partition_key = requested_at.timestamp_millis() / 1000;
-    
     let start = Instant::now();
     let response = state.reqwest_client
             .post(format!("{url}/payments"))

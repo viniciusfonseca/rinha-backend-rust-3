@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering};
 
-use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::{PartitionRecord, PaymentsStorage}, worker::QueueEvent};
+use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::StorageRecord, worker::QueueEvent};
 
 pub struct AppState {
     pub tx: tokio::sync::mpsc::Sender<QueueEvent>,
@@ -11,8 +11,7 @@ pub struct AppState {
     pub signal_tx: tokio::sync::mpsc::Sender<()>,
     pub queue_len: AtomicI32,
     pub consuming_payments: AtomicBool,
-    pub storage: PaymentsStorage,
-    pub batch_tx: tokio::sync::mpsc::Sender<PartitionRecord>,
+    pub batch_tx: tokio::sync::mpsc::Sender<StorageRecord>,
 }
 
 impl AppState {

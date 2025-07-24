@@ -1,10 +1,10 @@
 
 use std::sync::{atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering}, Arc};
 use axum::{routing, Router};
-use tokio::sync::Semaphore;
+use tokio::{io::AsyncWriteExt, sync::Semaphore};
 // use tokio::sync::Semaphore;
 
-use crate::{app_state::AppState, atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}};
+use crate::{app_state::AppState, atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::{PAYMENTS_STORAGE_PATH, PAYMENTS_STORAGE_PATH_DATA}, worker::update_payment_processor_health_statuses_from_file};
 
 mod app_state;
 mod atomicf64;
@@ -49,8 +49,6 @@ async fn main() -> anyhow::Result<()> {
 
     let consuming_payments = AtomicBool::new(true);
 
-    let storage = storage::PaymentsStorage::new();
-
     let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(50000);
 
     let state = Arc::new(AppState {
@@ -62,13 +60,11 @@ async fn main() -> anyhow::Result<()> {
         signal_tx,
         queue_len,
         consuming_payments,
-        storage,
         batch_tx,
     });
 
     let state_async_0 = state.clone();
     let state_async_1 = state.clone();
-    let state_async_2 = state.clone();
 
     tokio::spawn(async move {
         println!("Starting queue processor");
@@ -98,55 +94,67 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
             while !state_async_0.consuming_payments() {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                _ = update_payment_processor_health_statuses_from_file(&state_async_0).await;
+                _ = state_async_0.update_preferred_payment_processor();
             }
         }
     });
 
     tokio::spawn(async move {
         println!("Starting batch processor");
-        loop {
-            let mut records = Vec::new();
-            // if no records are received, wait for a short period
-            if batch_rx.is_empty() {
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                continue;
-            }
-            while let Some(record) = batch_rx.recv().await {
-                records.push(record);
-            }
+        std::fs::create_dir_all(PAYMENTS_STORAGE_PATH).ok();
 
-            _ = state_async_2.storage.batch_insert(&records).await;
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        let file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&PAYMENTS_STORAGE_PATH_DATA)
+            .await
+            .expect("Failed to open or create partition file");
+
+        let mut bufwriter = tokio::io::BufWriter::new(file);
+
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(30));
+
+        loop {
+            tokio::select! {
+                Some((correlation_id, amount, payment_processor_id, requested_at)) = batch_rx.recv() => {
+                    let bytes = format!("{},{},{},{}\n", correlation_id, amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
+                    bufwriter.write_all(&bytes).await.expect("Failed to write to file");
+                },
+                _ = ticker.tick() => {
+                    bufwriter.flush().await.expect("Failed to flush file");
+                },
+            }
         }
     });
 
-    // tokio::spawn(async move {
-    //     println!("Starting health updater");
-    //     let health_status_update_period = if is_primary_node {
-    //         tokio::time::Duration::from_millis(5005)
-    //     } else {
-    //         tokio::time::Duration::from_millis(500)
-    //     };
-    //     loop {
-    //         if is_primary_node {
-    //             _ = tokio::join! {
-    //                 worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
-    //                 worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
-    //             };
-    //         }
-    //         else {
-    //             _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
-    //         }
-    //         let update_result = &state_async_1.update_preferred_payment_processor();
-    //         if !state_async_1.consuming_payments() && update_result.is_ok() {
-    //             _ = state_async_1.signal_tx.send(()).await;
-    //             println!("One of the payment processors is healthy. Start consuming payments");
-    //             state_async_1.update_consuming_payments(true);
-    //         }
-    //         tokio::time::sleep(health_status_update_period).await;
-    //     }
-    // });
+    tokio::spawn(async move {
+
+        println!("Starting health updater");
+        let health_status_update_period = if is_primary_node {
+            tokio::time::Duration::from_millis(5005)
+        } else {
+            tokio::time::Duration::from_millis(500)
+        };
+        loop {
+            if is_primary_node {
+                _ = tokio::join! {
+                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
+                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
+                };
+            }
+            else {
+                _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+            }
+            let update_result = &state_async_1.update_preferred_payment_processor();
+            if !state_async_1.consuming_payments() && update_result.is_ok() {
+                _ = state_async_1.signal_tx.send(()).await;
+                println!("One of the payment processors is healthy. Start consuming payments");
+                state_async_1.update_consuming_payments(true);
+            }
+            tokio::time::sleep(health_status_update_period).await;
+        }
+    });
 
     let app = Router::new()
         .route("/payments", routing::post(http_api::payments))

@@ -10,8 +10,8 @@ pub enum PaymentProcessorIdentifier {
 impl ToString for PaymentProcessorIdentifier {
     fn to_string(&self) -> String {
         match self {
-            PaymentProcessorIdentifier::Default => "default".to_string(),
-            PaymentProcessorIdentifier::Fallback => "fallback".to_string(),
+            PaymentProcessorIdentifier::Default => "D".to_string(),
+            PaymentProcessorIdentifier::Fallback => "F".to_string(),
         }
     }
 }

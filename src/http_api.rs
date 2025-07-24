@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::{app_state::AppState, storage::PaymentsSummary};
+use crate::{app_state::AppState, storage::{self, PaymentsSummary}};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,9 +23,9 @@ pub async fn purge_payments(State(_): State<Arc<AppState>>) -> axum::http::Statu
     axum::http::StatusCode::OK
 }
 
-pub async fn payments_summary(State(state): State<Arc<AppState>>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> impl IntoResponse {
+pub async fn payments_summary(Query(params): Query<HashMap<String, DateTime<Utc>>>) -> impl IntoResponse {
 
-    match state.storage.get_summary(
+    match storage::get_summary(
         &params.get("from").unwrap_or(&Utc::now()),
         &params.get("to").unwrap_or(&Utc::now())
     ).await {
