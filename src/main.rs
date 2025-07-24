@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
         let mut records = 0;
         let mut bufwriter = tokio::io::BufWriter::new(file);
 
-        let mut flush_ticker = tokio::time::interval(tokio::time::Duration::from_millis(30));
+        let mut flush_ticker = tokio::time::interval(tokio::time::Duration::from_millis(10));
         let mut health_update_ticker = tokio::time::interval(if is_primary_node {
             tokio::time::Duration::from_millis(5005)
         } else {
