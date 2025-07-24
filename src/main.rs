@@ -101,12 +101,12 @@ async fn main() -> anyhow::Result<()> {
 
         let mut bufwriter = tokio::io::BufWriter::new(file);
 
-        let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(70));
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(50));
 
         loop {
             tokio::select! {
-                Some((correlation_id, amount, payment_processor_id, requested_at)) = batch_rx.recv() => {
-                    let bytes = format!("{},{},{},{}\n", correlation_id, amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
+                Some((amount, payment_processor_id, requested_at)) = batch_rx.recv() => {
+                    let bytes = format!("{},{},{}\n", amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
                     bufwriter.write_all(&bytes).await.expect("Failed to write to file");
                 },
                 _ = ticker.tick() => {

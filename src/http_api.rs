@@ -15,7 +15,9 @@ pub struct PaymentPayload {
 }
 
 pub async fn payments(State(state): State<Arc<AppState>>, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
-    state.send_event(&(payload.correlation_id, payload.amount)).await;
+    tokio::spawn(async move {
+        state.send_event(&(payload.correlation_id, payload.amount)).await;
+    });
     axum::http::StatusCode::ACCEPTED
 }
 

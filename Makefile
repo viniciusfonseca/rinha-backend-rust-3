@@ -1,3 +1,11 @@
+k6-test-html:
+	K6_WEB_DASHBOARD=true \
+	K6_WEB_DASHBOARD_PORT=5665 \
+	K6_WEB_DASHBOARD_PERIOD=1s \
+	K6_WEB_DASHBOARD_OPEN=true \
+	K6_WEB_DASHBOARD_EXPORT=report.html \
+	k6 run -e MAX_REQUESTS=500 tests/rinha.js
+
 k6-test:
 	k6 run -e MAX_REQUESTS=500 tests/rinha.js
 

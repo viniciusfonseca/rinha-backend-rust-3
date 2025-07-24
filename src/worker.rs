@@ -12,10 +12,7 @@ pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> a
     while state.consuming_payments() {
         match call_payment_processor(&state, &event).await {
             Ok((payment_processor_id, requested_at)) => {
-                // state.storage.insert_payment(&event, payment_processor_id, requested_at).await?;
-                // partition.write(&event.0, event.1, &payment_processor_id.to_string(), requested_at).await?;
-                state.batch_tx.send((event.0.clone(), event.1, payment_processor_id.to_string(), requested_at)).await?;
-                // state.storage.insert_payment(event, payment_processor_id, requested_at).await?;
+                state.batch_tx.send((event.1, payment_processor_id.to_string(), requested_at)).await?;
                 return Ok(())
             }
             Err(e) => {

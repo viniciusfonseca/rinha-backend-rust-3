@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-pub type StorageRecord = (String, Decimal, String, DateTime<Utc>);
+pub type StorageRecord = (Decimal, String, DateTime<Utc>);
 
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -33,7 +33,7 @@ pub async fn get_summary(from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Re
         .from_reader(data.as_slice());
 
     for record in csv_reader.deserialize() {
-        let (_, amount, payment_processor_id, requested_at): StorageRecord = record?;
+        let (amount, payment_processor_id, requested_at): StorageRecord = record?;
         if requested_at > *from && requested_at < *to {
             match payment_processor_id.as_str() {
                 "D" => {
