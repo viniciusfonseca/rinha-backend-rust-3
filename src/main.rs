@@ -13,7 +13,7 @@ mod http_api;
 mod storage;
 mod worker;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
 
     let node = std::env::var("NODE")?;
