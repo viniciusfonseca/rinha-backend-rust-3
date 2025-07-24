@@ -32,6 +32,10 @@ start-backend:
 	docker compose down
 	docker compose up
 
+setup-docker:
+	sudo systemctl start docker
+	sudo chmod 666 /var/run/docker.sock
+
 setup-local: docker-prune start-payment-processors start-backend-build
 
 ci-k6-test: start-payment-processors start-backend-build-detached k6-test

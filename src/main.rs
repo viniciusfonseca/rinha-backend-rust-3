@@ -101,7 +101,12 @@ async fn main() -> anyhow::Result<()> {
 
         let mut bufwriter = tokio::io::BufWriter::new(file);
 
-        let mut ticker = tokio::time::interval(tokio::time::Duration::from_millis(50));
+        let mut flush_ticker = tokio::time::interval(tokio::time::Duration::from_millis(30));
+        let mut health_update_ticker = tokio::time::interval(if is_primary_node {
+            tokio::time::Duration::from_millis(5005)
+        } else {
+            tokio::time::Duration::from_millis(500)
+        });
 
         loop {
             tokio::select! {
@@ -109,38 +114,27 @@ async fn main() -> anyhow::Result<()> {
                     let bytes = format!("{},{},{}\n", amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
                     bufwriter.write_all(&bytes).await.expect("Failed to write to file");
                 },
-                _ = ticker.tick() => {
+                _ = flush_ticker.tick() => {
                     bufwriter.flush().await.expect("Failed to flush file");
                 },
+                _ = health_update_ticker.tick() => {
+                    if is_primary_node {
+                        _ = tokio::join! {
+                            worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
+                            worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
+                        };
+                    }
+                    else {
+                        _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+                    }
+                    let update_result = &state_async_1.update_preferred_payment_processor();
+                    if !state_async_1.consuming_payments() && update_result.is_ok() {
+                        _ = state_async_1.signal_tx.send(()).await;
+                        println!("One of the payment processors is healthy. Start consuming payments");
+                        state_async_1.update_consuming_payments(true);
+                    }
+                }
             }
-        }
-    });
-
-    tokio::spawn(async move {
-
-        println!("Starting health updater");
-        let health_status_update_period = if is_primary_node {
-            tokio::time::Duration::from_millis(5005)
-        } else {
-            tokio::time::Duration::from_millis(500)
-        };
-        loop {
-            if is_primary_node {
-                _ = tokio::join! {
-                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
-                    worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
-                };
-            }
-            else {
-                _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
-            }
-            let update_result = &state_async_1.update_preferred_payment_processor();
-            if !state_async_1.consuming_payments() && update_result.is_ok() {
-                _ = state_async_1.signal_tx.send(()).await;
-                println!("One of the payment processors is healthy. Start consuming payments");
-                state_async_1.update_consuming_payments(true);
-            }
-            tokio::time::sleep(health_status_update_period).await;
         }
     });
 

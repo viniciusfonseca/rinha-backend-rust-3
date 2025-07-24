@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use axum::{extract::{Query, State}, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
@@ -27,11 +27,15 @@ pub async fn purge_payments(State(_): State<Arc<AppState>>) -> axum::http::Statu
 
 pub async fn payments_summary(Query(params): Query<HashMap<String, DateTime<Utc>>>) -> impl IntoResponse {
 
+    let start = Instant::now();
     match storage::get_summary(
         &params.get("from").unwrap_or(&Utc::now()),
         &params.get("to").unwrap_or(&Utc::now())
     ).await {
-        Ok(summary) => Json(summary),
+        Ok(summary) => {
+            println!("Got summary in {}ms", start.elapsed().as_millis());
+            Json(summary)
+        },
         Err(e) => {
             println!("Error at payments_summary: {e}");
             Json(PaymentsSummary::default())
