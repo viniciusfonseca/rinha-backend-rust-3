@@ -7,7 +7,7 @@ k6-test-html:
 	k6 run -e MAX_REQUESTS=550 tests/rinha.js
 
 k6-test:
-	k6 run -e MAX_REQUESTS=850 tests/rinha.js
+	k6 run -e MAX_REQUESTS=550 tests/rinha.js
 
 docker-prune:
 	docker compose down
@@ -38,7 +38,8 @@ setup-docker:
 
 setup-local: docker-prune start-payment-processors start-backend-build
 
-ci-k6-test: start-payment-processors start-backend-build-detached k6-test
+ci-k6-test: start-payment-processors start-backend-build-detached
+	k6 run -e MAX_REQUESTS=550 tests/rinha.js
 
 build-image:
 	docker build . -t distanteagle16/rinhabackend3

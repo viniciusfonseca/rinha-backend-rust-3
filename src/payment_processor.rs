@@ -2,7 +2,7 @@ use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
 use crate::atomicf64::AtomicF64;
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug)]
 pub enum PaymentProcessorIdentifier {
     Default,
     Fallback,
@@ -16,7 +16,6 @@ impl ToString for PaymentProcessorIdentifier {
     }
 }
 
-#[derive(Clone)]
 pub struct PaymentProcessor {
     pub id: PaymentProcessorIdentifier,
     pub url: String,

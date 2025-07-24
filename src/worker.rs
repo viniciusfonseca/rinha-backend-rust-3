@@ -10,14 +10,9 @@ pub type QueueEvent = (String, Decimal);
 
 pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<()> {
     while state.consuming_payments() {
-        match call_payment_processor(&state, &event).await {
-            Ok((payment_processor_id, requested_at)) => {
-                state.batch_tx.send((event.1, payment_processor_id.to_string(), requested_at)).await?;
-                return Ok(())
-            }
-            Err(e) => {
-                // println!("Error at call_payment_processor: {}", e);
-            }
+        if let Ok((payment_processor_id, requested_at)) = call_payment_processor(&state, &event).await {
+            state.batch_tx.send((event.1, payment_processor_id.to_string(), requested_at)).await?;
+            return Ok(());
         }
     }
     Err(anyhow::Error::msg("Payments are not being consumed"))

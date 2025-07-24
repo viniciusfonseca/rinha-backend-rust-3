@@ -30,11 +30,6 @@ impl AppState {
             PaymentProcessorIdentifier::Fallback => self.preferred_payment_processor.store(1, Ordering::Relaxed),
         }
     }
-    pub async fn send_event(&self, event: &QueueEvent) {
-        if let Err(e) = self.tx.send(event.clone()).await {
-            println!("Failed to send event: {}", e);
-        }
-    }
 
     pub fn update_payment_processor_state(
         &self,
