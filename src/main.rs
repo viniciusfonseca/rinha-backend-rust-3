@@ -1,5 +1,5 @@
 
-use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
+use std::{os::unix::fs::PermissionsExt, sync::{atomic::{AtomicBool, AtomicU16}, Arc}};
 use axum::{routing, Router};
 use tokio::{io::AsyncWriteExt, sync::Semaphore};
 
@@ -99,7 +99,6 @@ async fn main() -> anyhow::Result<()> {
             .await
             .expect("Failed to open or create partition file");
 
-        // let mut records = 0;
         let mut bufwriter = tokio::io::BufWriter::new(file);
 
         let mut flush_ticker = tokio::time::interval(tokio::time::Duration::from_millis(10));
@@ -114,18 +113,10 @@ async fn main() -> anyhow::Result<()> {
                 Some((amount, payment_processor_id, requested_at)) = batch_rx.recv() => {
                     let bytes = format!("{},{},{}\n", amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
                     bufwriter.write(&bytes).await.expect("Failed to write to file");
-                    // records += 1;
                 },
-                _ = flush_ticker.tick() => {
-                    //     if bufwriter.buffer().is_empty() {
-                        //         continue;
-                        //     }
-                        // let start = Instant::now();
-                        // let elapsed = start.elapsed().as_millis();
-                        // println!("Flushed {records} records in {}ms at {}", elapsed, Utc::now().to_rfc3339());
-                        // records = 0;
-                    bufwriter.flush().await.expect("Failed to flush file");
-                },
+                _ = flush_ticker.tick() =>
+                    bufwriter.flush().await.expect("Failed to flush file"),
+                    
                 _ = health_update_ticker.tick() => {
                     let state_async_1 = state_async_1.clone();
                     tokio::spawn(async move {
@@ -156,8 +147,25 @@ async fn main() -> anyhow::Result<()> {
         .route("/purge-payments", routing::post(http_api::purge_payments))
         .with_state(state);
 
-    let tcp_listen = std::env::var("TCP_LISTEN")?;
-    let listener = tokio::net::TcpListener::bind(tcp_listen).await?;
+    let hostname = std::env::var("HOSTNAME").unwrap();
+
+    let sockets_dir = "/tmp/sockets";
+    std::fs::create_dir_all(std::path::Path::new(sockets_dir)).unwrap();
+    let socket_path = format!("{sockets_dir}/{hostname}.sock");
+    match tokio::fs::remove_file(&socket_path).await {
+        Err(e) => println!("warn: unable to unlink path {socket_path}: {e}"),
+        _ => ()
+    };
+
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+        .expect(format!("error listening to socket {socket_path}").as_str());
+    listener.set_nonblocking(true).unwrap();
+    let mut permissions = std::fs::metadata(&socket_path).unwrap().permissions();
+    permissions.set_mode(0o777);
+    std::fs::set_permissions(&socket_path, permissions).unwrap();
+
+    let listener = tokio::net::UnixListener::from_std(listener)
+        .expect("error parsing std listener");
 
     axum::serve(listener, app).await?;
 
