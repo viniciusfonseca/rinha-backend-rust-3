@@ -113,35 +113,38 @@ async fn main() -> anyhow::Result<()> {
             tokio::select! {
                 Some((amount, payment_processor_id, requested_at)) = batch_rx.recv() => {
                     let bytes = format!("{},{},{}\n", amount, payment_processor_id, requested_at.to_rfc3339()).into_bytes();
-                    bufwriter.write_all(&bytes).await.expect("Failed to write to file");
+                    bufwriter.write(&bytes).await.expect("Failed to write to file");
                     // records += 1;
                 },
                 _ = flush_ticker.tick() => {
-                    if bufwriter.buffer().is_empty() {
-                        continue;
-                    }
-                    // let start = Instant::now();
+                    //     if bufwriter.buffer().is_empty() {
+                        //         continue;
+                        //     }
+                        // let start = Instant::now();
+                        // let elapsed = start.elapsed().as_millis();
+                        // println!("Flushed {records} records in {}ms at {}", elapsed, Utc::now().to_rfc3339());
+                        // records = 0;
                     bufwriter.flush().await.expect("Failed to flush file");
-                    // let elapsed = start.elapsed().as_millis();
-                    // println!("Flushed {records} records in {}ms at {}", elapsed, Utc::now().to_rfc3339());
-                    // records = 0;
                 },
                 _ = health_update_ticker.tick() => {
-                    if is_primary_node {
-                        _ = tokio::join! {
-                            worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
-                            worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
-                        };
-                    }
-                    else {
-                        _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
-                    }
-                    let update_result = &state_async_1.update_preferred_payment_processor();
-                    if !state_async_1.consuming_payments() && update_result.is_ok() {
-                        _ = state_async_1.signal_tx.send(()).await;
-                        println!("One of the payment processors is healthy. Start consuming payments");
-                        state_async_1.update_consuming_payments(true);
-                    }
+                    let state_async_1 = state_async_1.clone();
+                    tokio::spawn(async move {
+                        if is_primary_node {
+                            _ = tokio::join! {
+                                worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Default),
+                                worker::update_payment_processor_health(&state_async_1, PaymentProcessorIdentifier::Fallback)
+                            };
+                        }
+                        else {
+                            _ = worker::update_payment_processor_health_statuses_from_file(&state_async_1).await;
+                        }
+                        let update_result = &state_async_1.update_preferred_payment_processor();
+                        if !state_async_1.consuming_payments() && update_result.is_ok() {
+                            _ = state_async_1.signal_tx.send(()).await;
+                            println!("One of the payment processors is healthy. Start consuming payments");
+                            state_async_1.update_consuming_payments(true);
+                        }
+                    });
                 }
             }
         }
