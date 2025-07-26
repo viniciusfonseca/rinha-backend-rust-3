@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
-use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::StorageRecord, worker::QueueEvent};
+use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, worker::QueueEvent};
 
 pub struct AppState {
     pub tx: tokio_mpmc::Sender<QueueEvent>,

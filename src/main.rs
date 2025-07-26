@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let worker_threads = std::env::var("WORKER_THREADS")
         .unwrap_or("500".to_string()).parse().unwrap();
 
-    let (signal_tx, signal_rx) = tokio_mpmc::channel(50000);
+    let (signal_tx, signal_rx) = tokio_mpmc::channel(worker_threads);
 
     let reqwest_client = reqwest::Client::new();
 

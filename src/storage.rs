@@ -59,7 +59,7 @@ pub async fn get_summary(from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Re
 
     while let Some(record) = records.next().await {
         let (amount, payment_processor_id, requested_at): StorageRecord = record?;
-        if requested_at > from && requested_at < to {
+        if requested_at >= from && requested_at <= to {
             let summary_details = match payment_processor_id.as_str() {
                 "D" => &mut default,
                 "F" => &mut fallback,

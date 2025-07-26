@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use tokio_mpmc::Sender;
 
-use crate::{app_state::AppState, storage::{self, PaymentsSummary}, worker::QueueEvent};
+use crate::{storage::{self, PaymentsSummary}, worker::QueueEvent};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
