@@ -1,11 +1,12 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, time::Instant};
 
 use axum::{extract::{Query, State}, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
+use tokio_mpmc::Sender;
 
-use crate::{app_state::AppState, storage::{self, PaymentsSummary}};
+use crate::{app_state::AppState, storage::{self, PaymentsSummary}, worker::QueueEvent};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,12 +15,12 @@ pub struct PaymentPayload {
     amount: Decimal,
 }
 
-pub async fn payments(State(state): State<Arc<AppState>>, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
-    _ = state.tx.send((payload.correlation_id, payload.amount)).await;
+pub async fn payments(State(tx): State<Sender<QueueEvent>>, Json(payload): Json<PaymentPayload>) -> axum::http::StatusCode {
+    _ = tx.send((payload.correlation_id, payload.amount)).await;
     axum::http::StatusCode::ACCEPTED
 }
 
-pub async fn purge_payments(State(_): State<Arc<AppState>>) -> axum::http::StatusCode {
+pub async fn purge_payments() -> axum::http::StatusCode {
     axum::http::StatusCode::OK
 }
 

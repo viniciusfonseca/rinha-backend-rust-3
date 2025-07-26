@@ -6,7 +6,7 @@ use serde::Serialize;
 use tokio::fs::File;
 use tokio::io::BufReader;
 
-pub type StorageRecord = (Decimal, String, DateTime<Utc>);
+pub type StorageRecord = (Decimal, String, i64);
 
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +25,15 @@ pub const PAYMENTS_STORAGE_PATH: &'static str = "/tmp/payments";
 pub const PAYMENTS_STORAGE_PATH_HEALTH: &'static str = "/tmp/payments/health.json";
 pub const PAYMENTS_STORAGE_PATH_DATA: &'static str = "/tmp/payments/data";
 
+pub async fn get_datafile() -> anyhow::Result<File> {
+    let file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&PAYMENTS_STORAGE_PATH_DATA)
+        .await
+        .expect("Failed to open or create partition file");
+    Ok(file)
+}
 
 pub async fn get_summary(from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Result<PaymentsSummary> {
     let mut default = PaymentsSummaryDetails::default();
@@ -45,9 +54,12 @@ pub async fn get_summary(from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Re
 
     let mut records = csv_deserializer.deserialize::<StorageRecord>();
 
+    let from = from.timestamp_millis();
+    let to = to.timestamp_millis();
+
     while let Some(record) = records.next().await {
         let (amount, payment_processor_id, requested_at): StorageRecord = record?;
-        if requested_at > *from && requested_at < *to {
+        if requested_at > from && requested_at < to {
             let summary_details = match payment_processor_id.as_str() {
                 "D" => &mut default,
                 "F" => &mut fallback,

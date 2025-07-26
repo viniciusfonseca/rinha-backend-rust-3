@@ -3,14 +3,14 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::StorageRecord, worker::QueueEvent};
 
 pub struct AppState {
-    pub tx: tokio::sync::mpsc::Sender<QueueEvent>,
+    pub tx: tokio_mpmc::Sender<QueueEvent>,
     pub reqwest_client: reqwest::Client,
     pub default_payment_processor: PaymentProcessor,
     pub fallback_payment_processor: PaymentProcessor,
     pub preferred_payment_processor: AtomicU16,
-    pub signal_tx: tokio::sync::mpsc::Sender<()>,
+    pub signal_tx: tokio_mpmc::Sender<()>,
     pub consuming_payments: AtomicBool,
-    pub batch_tx: tokio::sync::mpsc::Sender<StorageRecord>,
+    // pub batch_tx: tokio::sync::mpsc::Sender<StorageRecord>,
 }
 
 impl AppState {

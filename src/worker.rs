@@ -3,16 +3,16 @@ use std::{sync::Arc, time::Instant};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 
-use crate::{app_state::AppState, payment_processor::PaymentProcessorIdentifier, storage::PAYMENTS_STORAGE_PATH_HEALTH};
+use crate::{app_state::AppState, payment_processor::PaymentProcessorIdentifier, storage::{StorageRecord, PAYMENTS_STORAGE_PATH_HEALTH}};
 
 pub type QueueEvent = (String, Decimal);
 
-pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<()> {
+pub async fn process_queue_event(state: &Arc<AppState>, event: &QueueEvent) -> anyhow::Result<StorageRecord> {
     while state.consuming_payments() {
         if let Ok((payment_processor_id, requested_at)) = call_payment_processor(&state, &event).await {
-            state.batch_tx.send((event.1, payment_processor_id.to_string(), requested_at)).await?;
-            return Ok(());
+            return Ok((event.1, payment_processor_id.to_string(), requested_at.timestamp_millis()));
         }
     }
     Err(anyhow::Error::msg("Payments are not being consumed"))
