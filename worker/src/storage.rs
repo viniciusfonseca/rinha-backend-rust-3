@@ -10,7 +10,8 @@ pub struct Storage {
 
 impl Storage {
     pub async fn init() -> Self {
-        let (client, connection) = tokio_postgres::connect("host=localhost user=postgres dbname=mydb", tokio_postgres::NoTls).await.unwrap();
+        let psql_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let (client, connection) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await.unwrap();
         tokio::spawn(async move {
             if let Err(e) = connection.await {
                 eprintln!("Connection error: {}", e);

@@ -8,6 +8,9 @@ mod payments;
 mod summary;
 mod uds;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use crate::{summary::PAYMENTS_SUMMARY_QUERY, uds::set_socket_permissions};
 
 #[derive(Clone)]

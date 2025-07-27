@@ -3,12 +3,15 @@ use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 use crossbeam::channel::TryRecvError;
 use tokio::net::UnixDatagram;
 
-use crate::{atomicf64::AtomicF64, payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::Storage};
+use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::Storage};
 
 mod atomicf64;
 mod health_check;
 mod payment_processor;
 mod storage;
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Clone)]
 struct WorkerState {
@@ -31,23 +34,17 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or("10".to_string())
         .parse()?;
 
-    let default_payment_processor = PaymentProcessor {
-        id: PaymentProcessorIdentifier::Default,
-        url: std::env::var("PAYMENT_PROCESSOR_URL_DEFAULT")?,
-        failing: Arc::new(AtomicBool::new(false)),
-        min_response_time: Arc::new(AtomicF64::new(0.0)),
-        tax: 0.05,
-        efficiency: Arc::new(AtomicF64::new(0.0)),
-    };
+    let default_payment_processor = PaymentProcessor::new(
+        PaymentProcessorIdentifier::Default,
+        std::env::var("PAYMENT_PROCESSOR_URL_DEFAULT")?,
+        0.05
+    );
 
-    let fallback_payment_processor = PaymentProcessor {
-        id: PaymentProcessorIdentifier::Fallback,
-        url: std::env::var("PAYMENT_PROCESSOR_URL_FALLBACK")?,
-        failing: Arc::new(AtomicBool::new(false)),
-        min_response_time: Arc::new(AtomicF64::new(0.0)),
-        tax: 0.15,
-        efficiency: Arc::new(AtomicF64::new(0.0)),
-    };
+    let fallback_payment_processor = PaymentProcessor::new(
+        PaymentProcessorIdentifier::Fallback,
+        std::env::var("PAYMENT_PROCESSOR_URL_FALLBACK")?,
+        0.15
+    );
 
     let (tx, rx) = crossbeam::channel::unbounded();
     let (signal_tx, signal_rx) = crossbeam::channel::bounded(worker_threads);
@@ -74,11 +71,12 @@ async fn main() -> anyhow::Result<()> {
                         let split = message.split(':').collect::<Vec<&str>>();
                         let correlation_id = split[0].to_string();
                         let amount: f64 = split[1].parse().unwrap_or(0.0);
-                        tx.send((correlation_id, amount)).unwrap();
+                        tx.send((correlation_id, amount))?;
                     }
-                    Err(e) => eprintln!("Error receiving from socket: {}", e),
+                    Err(e) => break eprintln!("Error receiving from socket: {}", e),
                 }
             }
+            Ok::<(), anyhow::Error>(())
         });
     }
 
@@ -89,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
         let signal_rx = signal_rx.clone();
         let storage = Storage::init().await;
         tokio::spawn(async move {
-            loop {
+            'x: loop {
                 loop {
                     match rx.try_recv() {
                         Ok(event) => {
@@ -100,27 +98,29 @@ async fn main() -> anyhow::Result<()> {
                             }
                             match state.process_payment(&event).await {
                                 Ok((payment_processor_id, requested_at)) => {
-                                    storage.save_payment(event.1, payment_processor_id, requested_at).await.unwrap();
+                                    storage.save_payment(event.1, payment_processor_id, requested_at).await?;
                                 }
                                 Err(e) => {
                                     eprintln!("Error processing payment: {}", e);
-                                    tx.send(event).unwrap();
+                                    tx.send(event)?;
                                 },
                             }
                         }
                         Err(TryRecvError::Empty) => continue,
-                        Err(e) => eprintln!("Error receiving from channel: {}", e),
+                        Err(e) => break 'x eprintln!("Error receiving from channel: {}", e),
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
                 loop {
                     match signal_rx.try_recv() {
                         Ok(_) => break,
-                        Err(TryRecvError::Empty) => continue,
-                        Err(e) => eprintln!("Error receiving from signal channel: {}", e),
+                        Err(TryRecvError::Empty) => (),
+                        Err(e) => break 'x eprintln!("Error receiving from signal channel: {}", e),
                     }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
+            Ok::<(), anyhow::Error>(())
         });
     }
 

@@ -30,6 +30,18 @@ pub struct PaymentProcessor {
 }
 
 impl PaymentProcessor {
+
+    pub fn new(id: PaymentProcessorIdentifier, url: String, tax: f64) -> Self {
+        Self {
+            id,
+            url,
+            failing: Arc::new(AtomicBool::new(false)),
+            min_response_time: Arc::new(AtomicF64::new(0.0)),
+            tax,
+            efficiency: Arc::new(AtomicF64::new(0.0)),
+        }
+    }
+
     pub fn failing(&self) -> bool { self.failing.load(std::sync::atomic::Ordering::Relaxed) }
     pub fn min_response_time(&self) -> f64 { self.min_response_time.load(std::sync::atomic::Ordering::Relaxed) }
     pub fn efficiency(&self) -> f64 { self.efficiency.load(std::sync::atomic::Ordering::Relaxed) }

@@ -1,22 +1,19 @@
 services:
   api01: &api
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     hostname: api01
     networks:
       - payment-processor
       - backend
-    expose:
-      - 8080
     environment:
-      NODE: 1
-      TCP_LISTEN: "0.0.0.0:8080"
-      WORKER_THREADS: 5
-      PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
-      PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
+      CHANNEL_THREADS: 5
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rinha
     deploy:
       resources:
         limits:
-          cpus: "0.25"
+          cpus: "0.15"
           memory: "10MB"
     volumes:
       - data:/tmp
@@ -25,14 +22,28 @@ services:
   api02:
     <<: *api
     hostname: api02
-    expose:
-      - 8081
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    networks:
+      - payment-processor
+      - backend
     environment:
-      NODE: 2
-      TCP_LISTEN: "0.0.0.0:8081"
-      WORKER_THREADS: 5
+      CHANNEL_THREADS: 5
+      WORKER_THREADS: 10
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rinha
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: "10MB"
+    volumes:
+      - data:/tmp
+      - sockets:/tmp/sockets
 
   nginx:
     image: nginx:latest
@@ -50,22 +61,24 @@ services:
       resources:
         limits:
           cpus: '0.2'
-          memory: '330MB'
+          memory: '70MB'
 
-  influxdb:
-    image: influxdb:1.8
+  postgres:
+    image: postgres:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rinha
     volumes:
-      - ./influxdb.conf:/etc/influxdb/influxdb.conf:ro
-    command: ["influxd", "-config", "/etc/influxdb/influxdb.conf"]
+      - data:/var/lib/postgresql/data
+      - ./assets/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - backend
-    ports:
-      - "8086:8086"
-    # deploy:
-    #   resources:
-    #     limits:
-    #       cpus: '0.8'
-    #       memory: '100MB'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.8'
+          memory: '250MB'
 
 networks:
   backend:
