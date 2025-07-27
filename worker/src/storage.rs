@@ -2,11 +2,15 @@ use chrono::{DateTime, Utc};
 
 use crate::payment_processor::PaymentProcessorIdentifier;
 
-
 pub struct Storage {
     client: tokio_postgres::Client,
     insert_statement: tokio_postgres::Statement,
 }
+
+const PAYMENTS_INSERT_QUERY: &'static str = "
+    INSERT INTO payments (amount, payment_processor_id, requested_at)
+    VALUES ($1, $2, $3)
+";
 
 impl Storage {
     pub async fn init() -> Self {
@@ -18,7 +22,7 @@ impl Storage {
             }
         });
 
-        let insert_statement = client.prepare("INSERT INTO payments (amount, payment_processor_id, requested_at) VALUES ($1, $2, $3)").await.unwrap();
+        let insert_statement = client.prepare(PAYMENTS_INSERT_QUERY).await.unwrap();
 
         Self { client, insert_statement }
     }

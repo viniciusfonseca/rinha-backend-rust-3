@@ -1,7 +1,6 @@
 use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 
 use crossbeam::channel::TryRecvError;
-use tokio::net::UnixDatagram;
 
 use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::Storage};
 

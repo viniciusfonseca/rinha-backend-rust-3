@@ -2,7 +2,7 @@ services:
   api01: &api
     build:
       context: .
-      dockerfile: Dockerfile.api.x86_64-unknown-linux-musl
+      dockerfile: docker/Dockerfile.api.x86_64-unknown-linux-musl
     hostname: api01
     networks:
       - payment-processor
@@ -12,7 +12,7 @@ services:
       - postgres
     environment:
       CHANNEL_THREADS: 5
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rinha
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
     deploy:
       resources:
         limits:
@@ -28,7 +28,7 @@ services:
   worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker.x86_64-unknown-linux-musl
+      dockerfile: docker/Dockerfile.worker.x86_64-unknown-linux-musl
     networks:
       - payment-processor
       - backend
@@ -37,7 +37,7 @@ services:
     environment:
       CHANNEL_THREADS: 5
       WORKER_THREADS: 10
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rinha
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:
@@ -69,12 +69,22 @@ services:
   postgres:
     image: postgres:latest
     hostname: postgres
+    user: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: rinha
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
     volumes:
       - ./assets/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./assets/postgresql.conf:/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     networks:
       - backend
     deploy:
