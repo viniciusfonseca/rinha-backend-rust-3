@@ -1,0 +1,19 @@
+[package]
+name = "api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+axum = "0.8.4"
+chrono = { version = "0.4.41", features = ["serde"] }
+crossbeam = { workspace = true }
+serde = { workspace = true }
+serde_json = "1.0.141"
+tokio = { workspace = true }
+tokio-postgres = { workspace = true }
+
+[[bin]]
+name = "rinha-api"
+path = "src/main.rs"

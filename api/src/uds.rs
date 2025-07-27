@@ -1,0 +1,24 @@
+use std::os::unix::fs::PermissionsExt;
+
+pub async fn create_unix_socket(socket_path: &str) -> anyhow::Result<tokio::net::UnixListener> {
+
+    if tokio::fs::remove_file(&socket_path).await.is_err() {
+        println!("warn: unable to unlink path {socket_path}");
+    }
+
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
+    listener.set_nonblocking(true)?;
+
+    set_socket_permissions(&socket_path)?;
+
+    let listener = tokio::net::UnixListener::from_std(listener)?;
+
+    Ok(listener)
+}
+
+pub fn set_socket_permissions(socket_path: &str) -> anyhow::Result<()> {
+    let mut permissions = std::fs::metadata(socket_path)?.permissions();
+    permissions.set_mode(0o777);
+    std::fs::set_permissions(socket_path, permissions)?;
+    Ok(())
+}
