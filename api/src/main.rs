@@ -23,17 +23,17 @@ struct ApiState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
-    let psql_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let psql_url = std::env::var("DATABASE_URL")?;
 
-    let (tx, rx) = crossbeam::channel::unbounded();
     let (psql_client, psql_conn) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await?;
-    let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-
     tokio::spawn(async move {
         if let Err(e) = psql_conn.await {
             eprintln!("Postgres connection error: {e}");
         }
     });
+
+    let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
+    let (tx, rx) = crossbeam::channel::unbounded();
 
     let state = ApiState {
         tx,
@@ -45,11 +45,19 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or("5".to_string())
         .parse()?;
 
+    println!("Starting with {channel_threads} channel threads");
+
     for _ in 0..channel_threads {
         let rx = rx.clone();
         tokio::spawn(async move {
             let worker_socket = "/tmp/sockets/worker.sock";
-            let tx_worker = UnixDatagram::bind(worker_socket)?;
+            let tx_worker = match UnixDatagram::bind(worker_socket) {
+                Ok(socket) => socket,
+                Err(e) => {
+                    eprintln!("Failed to bind UnixDatagram socket: {e}");
+                    return Err(e.into());
+                }
+            };
             set_socket_permissions(worker_socket)?;
             loop {
                 match rx.try_recv() {
@@ -77,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let hostname = std::env::var("HOSTNAME")?;
 
     let socket_path = format!("{sockets_dir}/{hostname}.sock");
+    println!("Binding to socket: {socket_path}");
     let listener = uds::create_unix_socket(&socket_path).await?;
 
     axum::serve(listener, app).await?;

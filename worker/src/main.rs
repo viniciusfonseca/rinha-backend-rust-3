@@ -63,9 +63,6 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
 
     let worker_socket_path = "/tmp/sockets/worker.sock";
-    if tokio::fs::remove_file(&worker_socket_path).await.is_err() {
-        println!("warn: unable to unlink path {worker_socket_path}");
-    }
 
     let socket = uds::bind_unix_datagram_socket(worker_socket_path).await?;
 

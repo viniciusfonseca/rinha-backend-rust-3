@@ -9,7 +9,6 @@ services:
       - backend
     depends_on:
       - worker
-      - postgres
     environment:
       CHANNEL_THREADS: 5
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
@@ -33,7 +32,8 @@ services:
       - payment-processor
       - backend
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       CHANNEL_THREADS: 5
       WORKER_THREADS: 10
@@ -80,7 +80,7 @@ services:
       - ./assets/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./assets/postgresql.conf:/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 20
