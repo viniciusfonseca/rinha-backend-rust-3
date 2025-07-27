@@ -4,7 +4,7 @@ use axum::{extract::{Query, State}, Json};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::AppState;
+use crate::ApiState;
 
 pub const PAYMENTS_SUMMARY_QUERY: &'static str = "
 SELECT COUNT(correlation_id) as total_requests, COALESCE(SUM(amount), 0) as total_amount, payment_processor
@@ -25,7 +25,7 @@ pub struct PaymentsSummary {
     pub fallback: PaymentsSummaryDetails
 }
 
-pub async fn summary(State(state): State<AppState>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> Json<PaymentsSummary> {
+pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> Json<PaymentsSummary> {
 
     let start = Instant::now();
     let rows = state.psql_client.query(&state.summary_statement, &[

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{routing, Router};
+use crossbeam::channel::TryRecvError;
 use tokio::net::UnixDatagram;
 
 mod payments;
@@ -10,7 +11,7 @@ mod uds;
 use crate::{summary::PAYMENTS_SUMMARY_QUERY, uds::set_socket_permissions};
 
 #[derive(Clone)]
-struct AppState {
+struct ApiState {
     tx: crossbeam::channel::Sender<(String, f64)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
@@ -31,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let state = AppState {
+    let state = ApiState {
         tx,
         psql_client: Arc::new(psql_client),
         summary_statement,
@@ -47,15 +48,13 @@ async fn main() -> anyhow::Result<()> {
             let worker_socket = "/tmp/sockets/worker.sock";
             let tx_worker = UnixDatagram::bind(worker_socket)?;
             set_socket_permissions(worker_socket)?;
-            'x: loop {
-                while !rx.is_empty() {
-                    match rx.try_recv() {
-                        Ok((correlation_id, amount)) => {
-                            tx_worker.send(format!("{correlation_id}:{amount}").as_bytes()).await?;
-                        }
-                        Err(crossbeam::channel::TryRecvError::Empty) => break,
-                        Err(e) => break 'x eprintln!("Error receiving from channel: {e}"),
+            loop {
+                match rx.try_recv() {
+                    Ok((correlation_id, amount)) => {
+                        tx_worker.send(format!("{correlation_id}:{amount}").as_bytes()).await?;
                     }
+                    Err(TryRecvError::Empty) => continue,
+                    Err(e) => break eprintln!("Error receiving from channel: {e}"),
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }

@@ -1,7 +1,7 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 
-use crate::AppState;
+use crate::ApiState;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,7 +10,7 @@ pub struct PaymentPayload {
     amount: f64,
 }
 
-pub async fn enqueue_payment(State(state): State<AppState>, Json(payload): Json<PaymentPayload>) -> StatusCode {
+pub async fn enqueue_payment(State(state): State<ApiState>, Json(payload): Json<PaymentPayload>) -> StatusCode {
     _ = state.tx.send((payload.correlation_id, payload.amount));
     StatusCode::ACCEPTED
 }
