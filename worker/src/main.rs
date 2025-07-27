@@ -9,6 +9,7 @@ mod atomicf64;
 mod health_check;
 mod payment_processor;
 mod storage;
+mod uds;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -26,9 +27,9 @@ struct WorkerState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     
-    let channel_threads = std::env::var("CHANNEL_THREADS")
-        .unwrap_or("5".to_string())
-        .parse()?;
+    // let channel_threads = std::env::var("CHANNEL_THREADS")
+    //     .unwrap_or("5".to_string())
+    //     .parse()?;
 
     let worker_threads = std::env::var("WORKER_THREADS")
         .unwrap_or("10".to_string())
@@ -58,27 +59,33 @@ async fn main() -> anyhow::Result<()> {
         consuming_payments: Arc::new(AtomicBool::new(true)),
     };
 
-    for _ in 0..channel_threads {
-        let worker_socket = "/tmp/sockets/worker.sock";
-        let socket = UnixDatagram::bind(worker_socket)?;
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            loop {
-                let mut buf = [0; 64];
-                match socket.recv(&mut buf).await {
-                    Ok(size) => {
-                        let message = String::from_utf8_lossy(&buf[..size]);
-                        let split = message.split(':').collect::<Vec<&str>>();
-                        let correlation_id = split[0].to_string();
-                        let amount: f64 = split[1].parse().unwrap_or(0.0);
-                        tx.send((correlation_id, amount))?;
-                    }
-                    Err(e) => break eprintln!("Error receiving from socket: {}", e),
-                }
-            }
-            Ok::<(), anyhow::Error>(())
-        });
+    let tx_channel = tx.clone();
+    let sockets_dir = "/tmp/sockets";
+    std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
+
+    let worker_socket_path = "/tmp/sockets/worker.sock";
+    if tokio::fs::remove_file(&worker_socket_path).await.is_err() {
+        println!("warn: unable to unlink path {worker_socket_path}");
     }
+
+    let socket = uds::bind_unix_datagram_socket(worker_socket_path).await?;
+
+    tokio::spawn(async move {
+        loop {
+            let mut buf = [0; 64];
+            match socket.recv(&mut buf).await {
+                Ok(size) => {
+                    let message = String::from_utf8_lossy(&buf[..size]);
+                    let split = message.split(':').collect::<Vec<&str>>();
+                    let correlation_id = split[0].to_string();
+                    let amount: f64 = split[1].parse().unwrap_or(0.0);
+                    tx_channel.send((correlation_id, amount))?;
+                }
+                Err(e) => break eprintln!("Error receiving from socket: {}", e),
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    });
 
     for _ in 0..worker_threads {
         let state = state.clone();

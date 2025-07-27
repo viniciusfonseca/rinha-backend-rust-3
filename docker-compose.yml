@@ -2,11 +2,14 @@ services:
   api01: &api
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile.api.x86_64-unknown-linux-musl
     hostname: api01
     networks:
       - payment-processor
       - backend
+    depends_on:
+      - worker
+      - postgres
     environment:
       CHANNEL_THREADS: 5
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/rinha
@@ -16,7 +19,6 @@ services:
           cpus: "0.15"
           memory: "10MB"
     volumes:
-      - data:/tmp
       - sockets:/tmp/sockets
 
   api02:
@@ -26,10 +28,12 @@ services:
   worker:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile.worker.x86_64-unknown-linux-musl
     networks:
       - payment-processor
       - backend
+    depends_on:
+      - postgres
     environment:
       CHANNEL_THREADS: 5
       WORKER_THREADS: 10
@@ -42,7 +46,6 @@ services:
           cpus: "0.2"
           memory: "10MB"
     volumes:
-      - data:/tmp
       - sockets:/tmp/sockets
 
   nginx:
@@ -65,12 +68,12 @@ services:
 
   postgres:
     image: postgres:latest
+    hostname: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: rinha
     volumes:
-      - data:/var/lib/postgresql/data
       - ./assets/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - backend
@@ -88,5 +91,4 @@ networks:
     external: true
 
 volumes:
-  data:
   sockets:

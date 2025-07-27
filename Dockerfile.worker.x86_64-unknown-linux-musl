@@ -1,0 +1,25 @@
+FROM rust:1.88.0-slim-bullseye AS builder
+
+RUN rustup target add x86_64-unknown-linux-musl \
+    && apt-get update && apt-get install -y \
+    musl-tools \
+    cmake \
+    clang \
+    pkg-config \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,-Bstatic -C link-arg=-lc"
+ENV RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,-Bstatic -C link-arg=-lc"
+
+ENV RUSTFLAGS="${RUSTFLAGS} --cfg mimalloc_global_allocator"
+
+WORKDIR /app
+
+COPY . .
+
+RUN cargo build --bin worker --release --target x86_64-unknown-linux-musl
+
+FROM scratch
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/worker .
+CMD ["./worker"]
