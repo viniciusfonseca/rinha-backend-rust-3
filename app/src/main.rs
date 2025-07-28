@@ -138,10 +138,7 @@ async fn main() -> anyhow::Result<()> {
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir)).unwrap();
     let socket_path = format!("{sockets_dir}/{hostname}.sock");
-    match tokio::fs::remove_file(&socket_path).await {
-        Err(e) => println!("warn: unable to unlink path {socket_path}: {e}"),
-        _ => ()
-    };
+    _ = tokio::fs::remove_file(&socket_path).await;
 
     let listener = std::os::unix::net::UnixListener::bind(&socket_path)
         .expect(format!("error listening to socket {socket_path}").as_str());

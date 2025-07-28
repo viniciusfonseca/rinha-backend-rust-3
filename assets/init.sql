@@ -1,7 +1,7 @@
 CREATE UNLOGGED TABLE payments (
 	id SERIAL PRIMARY KEY,
     amount DECIMAL NOT NULL,
-    requested_at TIMESTAMP NOT NULL,
+    requested_at TIMESTAMPTZ NOT NULL,
     payment_processor_id CHAR(1) NOT NULL
 );
 

@@ -1,8 +1,6 @@
 pub async fn bind_unix_datagram_socket(socket_path: &str) -> anyhow::Result<tokio::net::UnixDatagram> {
     
-    if tokio::fs::remove_file(socket_path).await.is_err() {
-        println!("warn: unable to unlink path {socket_path}");
-    }
+    _ = tokio::fs::remove_file(socket_path).await;
 
     let listener = std::os::unix::net::UnixDatagram::bind(socket_path)?;
     listener.set_nonblocking(true)?;

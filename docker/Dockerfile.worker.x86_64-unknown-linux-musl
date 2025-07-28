@@ -11,7 +11,6 @@ RUN rustup target add x86_64-unknown-linux-musl \
 
 ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,-Bstatic -C link-arg=-lc"
 ENV RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,-Bstatic -C link-arg=-lc"
-
 ENV RUSTFLAGS="${RUSTFLAGS} --cfg mimalloc_global_allocator"
 
 WORKDIR /app

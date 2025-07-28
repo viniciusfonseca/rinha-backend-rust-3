@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{routing, Router};
-use crossbeam::channel::TryRecvError;
+use rust_decimal::Decimal;
 use tokio::net::UnixDatagram;
 
 mod payments;
@@ -11,13 +11,14 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use crate::{summary::PAYMENTS_SUMMARY_QUERY, uds::set_socket_permissions};
+use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    tx: crossbeam::channel::Sender<(String, f64)>,
+    tx: async_channel::Sender<(String, Decimal)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
+    purge_statement: tokio_postgres::Statement,
 }
 
 #[tokio::main]
@@ -33,12 +34,14 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let (tx, rx) = crossbeam::channel::unbounded();
+    let purge_statement = psql_client.prepare("DELETE FROM PAYMENTS").await?;
+    let (tx, rx) = async_channel::bounded(16000);
 
     let state = ApiState {
         tx,
         psql_client: Arc::new(psql_client),
         summary_statement,
+        purge_statement,
     };
     
     let channel_threads = std::env::var("CHANNEL_THREADS")
@@ -51,23 +54,15 @@ async fn main() -> anyhow::Result<()> {
         let rx = rx.clone();
         tokio::spawn(async move {
             let worker_socket = "/tmp/sockets/worker.sock";
-            let tx_worker = match UnixDatagram::bind(worker_socket) {
-                Ok(socket) => socket,
-                Err(e) => {
-                    eprintln!("Failed to bind UnixDatagram socket: {e}");
-                    return Err(e.into());
-                }
-            };
-            set_socket_permissions(worker_socket)?;
+            let tx_worker = UnixDatagram::unbound()?;
             loop {
-                match rx.try_recv() {
+                match rx.recv().await {
                     Ok((correlation_id, amount)) => {
-                        tx_worker.send(format!("{correlation_id}:{amount}").as_bytes()).await?;
+                        tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), worker_socket).await?;
                     }
-                    Err(TryRecvError::Empty) => continue,
                     Err(e) => break eprintln!("Error receiving from channel: {e}"),
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
             Ok::<(), anyhow::Error>(())
         });

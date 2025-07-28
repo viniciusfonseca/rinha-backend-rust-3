@@ -2,9 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 
 pub async fn create_unix_socket(socket_path: &str) -> anyhow::Result<tokio::net::UnixListener> {
 
-    if tokio::fs::remove_file(&socket_path).await.is_err() {
-        println!("warn: unable to unlink path {socket_path}");
-    }
+    _ = tokio::fs::remove_file(&socket_path).await;
 
     let listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
     listener.set_nonblocking(true)?;
