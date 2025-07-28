@@ -1,35 +1,41 @@
+use std::collections::HashMap;
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 
-use crate::payment_processor::PaymentProcessorIdentifier;
+use crate::{payment_processor::PaymentProcessorIdentifier, WorkerState};
 
-pub struct Storage {
-    client: tokio_postgres::Client,
-    insert_statement: tokio_postgres::Statement,
-}
+impl WorkerState {
 
-const PAYMENTS_INSERT_QUERY: &'static str = "
-    INSERT INTO payments (amount, payment_processor_id, requested_at)
-    VALUES ($1, $2, $3)
-";
+    pub async fn init_db(&self) -> anyhow::Result<()> {
 
-impl Storage {
-    pub async fn init() -> anyhow::Result<Self> {
-        let psql_url = std::env::var("DATABASE_URL")?;
-        let (client, connection) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("Connection error: {e}");
-            }
-        });
+        let url = format!("{db_url}/query", db_url = self.db_url);
 
-        let insert_statement = client.prepare(PAYMENTS_INSERT_QUERY).await?;
+        let mut form_data = HashMap::new();
+        form_data.insert("q", "CREATE DATABASE db");
 
-        Ok(Self { client, insert_statement })
+        let status_code = self.reqwest_client.post(url)
+            .form(&form_data).send()
+            .await?
+            .status()
+            .as_u16();
+
+        println!("CREATE DB status code: {status_code}");
+
+        Ok(())
     }
 
-    pub async fn save_payment(&self, amount: Decimal, payment_processor_id: &PaymentProcessorIdentifier, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
-        self.client.execute(&self.insert_statement, &[&amount, &payment_processor_id.to_string(), &requested_at]).await?;
+    pub async fn save_payment(&self, amount: f64, payment_processor_id: &PaymentProcessorIdentifier, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
+
+        let url = format!("{db_url}/write?db=db", db_url = self.db_url);
+
+        let payment_processor_id = payment_processor_id.to_string();
+        let requested_at = requested_at.timestamp_millis();
+
+        self.reqwest_client.post(url)
+            .body(format!("payments,payment_processor_id={payment_processor_id} amount={amount} {requested_at}"))
+            .send()
+            .await?
+            .error_for_status()?;
+
         Ok(())
     }
 }

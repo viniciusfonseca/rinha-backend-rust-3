@@ -1,7 +1,6 @@
 use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Instant};
 
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::Serialize;
 
 use crate::{atomicf64::AtomicF64, WorkerState};
@@ -56,7 +55,7 @@ impl PaymentProcessor {
 #[serde(rename_all = "camelCase")]
 struct PaymentProcessorRequest {
     pub correlation_id: String,
-    pub amount: Decimal,
+    pub amount: f64,
     pub requested_at: chrono::DateTime<Utc>
 }
 
@@ -130,7 +129,7 @@ impl WorkerState {
         Ok(())
     }
 
-    pub async fn process_payment<'a>(&'a self, (correlation_id, amount): &(String, Decimal)) -> anyhow::Result<(&'a PaymentProcessorIdentifier, DateTime<Utc>)> {
+    pub async fn process_payment<'a>(&'a self, (correlation_id, amount): &(String, f64)) -> anyhow::Result<(&'a PaymentProcessorIdentifier, DateTime<Utc>)> {
 
         let payment_processor = self.preferred_payment_processor();
 

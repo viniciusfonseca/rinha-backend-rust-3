@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use axum::{routing, Router};
-use rust_decimal::Decimal;
 use tokio::net::UnixDatagram;
 
 mod payments;
@@ -11,37 +10,22 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use crate::summary::PAYMENTS_SUMMARY_QUERY;
-
 #[derive(Clone)]
 struct ApiState {
-    tx: async_channel::Sender<(String, Decimal)>,
-    psql_client: Arc<tokio_postgres::Client>,
-    summary_statement: tokio_postgres::Statement,
-    purge_statement: tokio_postgres::Statement,
+    tx: async_channel::Sender<(String, f64)>,
+    db_url: String,
+    reqwest_client: reqwest::Client,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
-    let psql_url = std::env::var("DATABASE_URL")?;
-
-    let (psql_client, psql_conn) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        if let Err(e) = psql_conn.await {
-            eprintln!("Postgres connection error: {e}");
-        }
-    });
-
-    let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let purge_statement = psql_client.prepare("DELETE FROM PAYMENTS").await?;
     let (tx, rx) = async_channel::bounded(16000);
 
     let state = ApiState {
         tx,
-        psql_client: Arc::new(psql_client),
-        summary_statement,
-        purge_statement,
+        db_url: std::env::var("DATABASE_URL")?,
+        reqwest_client: reqwest::Client::new(),
     };
     
     let channel_threads = std::env::var("CHANNEL_THREADS")

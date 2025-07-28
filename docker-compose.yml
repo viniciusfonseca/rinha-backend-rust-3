@@ -11,7 +11,7 @@ services:
       - worker
     environment:
       CHANNEL_THREADS: 5
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/db
+      DATABASE_URL: http://influxdb:8086
     deploy:
       resources:
         limits:
@@ -32,12 +32,12 @@ services:
       - payment-processor
       - backend
     depends_on:
-      postgres:
+      influxdb:
         condition: service_healthy
     environment:
       CHANNEL_THREADS: 5
       WORKER_THREADS: 50
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/db
+      DATABASE_URL: http://influxdb:8086
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:
@@ -66,27 +66,20 @@ services:
           cpus: '0.2'
           memory: '70MB'
 
-  postgres:
-    image: postgres:latest
-    hostname: db
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: db
-    ports:
-      - "5432:5432"
+  influxdb:
+    image: influxdb:latest
+    hostname: influxdb
     volumes:
-      - ./assets/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./assets/postgresql.conf:/docker-entrypoint-initdb.d/postgresql.conf
-    command: postgres -c config_file=/docker-entrypoint-initdb.d/postgresql.conf
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+      - ./assets/influxdb.conf:/etc/influxdb/influxdb.conf:ro
+    ports:
+      - "8086:8086"
     networks:
       - backend
+    healthcheck:
+      test: "curl -f http://influxdb:8086/ping"
+      interval: 5s
+      timeout: 10s
+      retries: 5
     deploy:
       resources:
         limits:

@@ -1,8 +1,6 @@
 use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 
-use rust_decimal::Decimal;
-
-use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::Storage};
+use crate::payment_processor::{PaymentProcessor, PaymentProcessorIdentifier};
 
 mod atomicf64;
 mod health_check;
@@ -15,6 +13,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Clone)]
 struct WorkerState {
+    pub db_url: String,
     pub reqwest_client: reqwest::Client,
     pub default_payment_processor: PaymentProcessor,
     pub fallback_payment_processor: PaymentProcessor,
@@ -46,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
     let (signal_tx, signal_rx) = async_channel::bounded(worker_threads);
 
     let state = WorkerState {
+        db_url: std::env::var("DATABASE_URL")?,
         reqwest_client: reqwest::Client::new(),
         default_payment_processor,
         fallback_payment_processor,
@@ -53,6 +53,8 @@ async fn main() -> anyhow::Result<()> {
         signal_tx,
         consuming_payments: Arc::new(AtomicBool::new(true)),
     };
+
+    state.init_db().await?;
 
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
@@ -79,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
                         println!("Received message: {}", message);
                         let split = message.split(':').collect::<Vec<&str>>();
                         let correlation_id = split[0].to_string();
-                        let amount: Decimal = split[1].parse().unwrap_or(Decimal::ZERO);
+                        let amount: f64 = split[1].parse().unwrap_or(0.0);
                         tx.send((correlation_id, amount)).await?;
                     }
                     Err(e) => break eprintln!("Error receiving from socket: {}", e),
@@ -96,7 +98,6 @@ async fn main() -> anyhow::Result<()> {
         let signal_rx = signal_rx.clone();
         tokio::spawn(async move {
             'x: loop {
-                let storage = Storage::init().await?;
                 loop {
                     match rx.recv().await {
                         Ok(event) => {
@@ -107,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                             match state.process_payment(&event).await {
                                 Ok((payment_processor_id, requested_at)) => {
-                                    storage.save_payment(event.1, payment_processor_id, requested_at).await?;
+                                    state.save_payment(event.1, payment_processor_id, requested_at).await?;
                                     println!("Saved payment: {event:?}");
                                 }
                                 Err(e) => {
