@@ -39,6 +39,9 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             let worker_socket = "/tmp/sockets/worker.sock";
             let tx_worker = UnixDatagram::unbound()?;
+            let backoff = std::env::var("BACKOFF_CHANNEL")
+                .unwrap_or("0".to_string())
+                .parse()?;
             loop {
                 match rx.recv().await {
                     Ok((correlation_id, amount)) => {
@@ -46,7 +49,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => break eprintln!("Error receiving from channel: {e}"),
                 }
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if backoff > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff)).await;
+                }
             }
             Ok::<(), anyhow::Error>(())
         });

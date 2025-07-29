@@ -10,13 +10,14 @@ services:
     depends_on:
       - worker
     environment:
-      CHANNEL_THREADS: 5
       DATABASE_URL: http://influxdb:8086
+      BACKOFF_CHANNEL: 5
+      CHANNEL_THREADS: 2
     deploy:
       resources:
         limits:
           cpus: "0.15"
-          memory: "10MB"
+          memory: "20MB"
     volumes:
       - sockets:/tmp/sockets
 
@@ -35,16 +36,16 @@ services:
       influxdb:
         condition: service_healthy
     environment:
-      CHANNEL_THREADS: 5
-      WORKER_THREADS: 50
       DATABASE_URL: http://influxdb:8086
+      CHANNEL_THREADS: 4
+      WORKER_THREADS: 2
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:
       resources:
         limits:
           cpus: "0.2"
-          memory: "10MB"
+          memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
 
@@ -64,7 +65,7 @@ services:
       resources:
         limits:
           cpus: '0.2'
-          memory: '70MB'
+          memory: '20MB'
 
   influxdb:
     image: influxdb:latest
@@ -84,7 +85,7 @@ services:
       resources:
         limits:
           cpus: '0.8'
-          memory: '250MB'
+          memory: '230MB'
 
 networks:
   backend:

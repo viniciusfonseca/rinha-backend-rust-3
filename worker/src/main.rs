@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
                     Ok(size) => {
                         if size == 0 { continue }
                         let message = String::from_utf8_lossy(&buf[..size]);
-                        println!("Received message: {}", message);
+                        // println!("Received message: {}", message);
                         let split = message.split(':').collect::<Vec<&str>>();
                         let correlation_id = split[0].to_string();
                         let amount: f64 = split[1].parse().unwrap_or(0.0);
@@ -119,7 +119,6 @@ async fn main() -> anyhow::Result<()> {
                         }
                         Err(e) => break 'x eprintln!("Error receiving from channel: {}", e),
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
                 loop {
                     match signal_rx.recv().await {
@@ -127,7 +126,6 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => break 'x eprintln!("Error receiving from signal channel: {}", e),
                     }
                 }
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
             Ok::<(), anyhow::Error>(())
         });

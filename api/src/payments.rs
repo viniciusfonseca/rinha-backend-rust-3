@@ -11,7 +11,7 @@ pub struct PaymentPayload {
 }
 
 pub async fn enqueue_payment(State(state): State<ApiState>, Json(payload): Json<PaymentPayload>) -> StatusCode {
-    _ = state.tx.send_blocking((payload.correlation_id, payload.amount));
+    _ = state.tx.send((payload.correlation_id, payload.amount)).await;
     StatusCode::ACCEPTED
 }
 
