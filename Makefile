@@ -19,6 +19,10 @@ start-payment-processors:
 	docker compose -f payment-processors/docker-compose.yml down
 	docker compose -f payment-processors/docker-compose.yml up -d
 
+start-backend:
+	docker compose down
+	docker compose up
+
 start-backend-build:
 	docker compose down
 	docker compose up --build

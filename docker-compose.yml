@@ -35,7 +35,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      CHANNEL_THREADS: 5
+      CHANNEL_THREADS: 20
       WORKER_THREADS: 50
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
@@ -44,7 +44,7 @@ services:
       resources:
         limits:
           cpus: "0.2"
-          memory: "10MB"
+          memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
 
@@ -64,7 +64,7 @@ services:
       resources:
         limits:
           cpus: '0.2'
-          memory: '70MB'
+          memory: '20MB'
 
   postgres:
     image: postgres:latest
