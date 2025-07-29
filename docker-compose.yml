@@ -10,6 +10,7 @@ services:
     depends_on:
       - worker
     environment:
+      BACKOFF_CHANNEL: 5
       CHANNEL_THREADS: 2
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
