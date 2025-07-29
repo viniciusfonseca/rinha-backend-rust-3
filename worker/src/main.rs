@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         consuming_payments: Arc::new(AtomicBool::new(true)),
     };
 
-    state.init_db().await?;
+    // state.init_db().await?;
 
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;

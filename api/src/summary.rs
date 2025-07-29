@@ -3,14 +3,9 @@ use std::{collections::HashMap, time::Instant};
 use axum::{extract::{Query, State}, Json};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use serde_json::json;
 
 use crate::ApiState;
-
-pub const PAYMENTS_SUMMARY_QUERY: &'static str = "
-SELECT COUNT(*) as total_requests, COALESCE(SUM(amount), 0) as total_amount, payment_processor_id
-FROM PAYMENTS
-WHERE requested_at BETWEEN $1 AND $2
-GROUP BY payment_processor_id";
 
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -29,28 +24,55 @@ pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap
 
     let start = Instant::now();
 
-    let url = format!("{db_url}/query", db_url = state.db_url);
-    let mut form_data = HashMap::new();
-    form_data.insert("db", "db");
-    form_data.insert("q", PAYMENTS_SUMMARY_QUERY);
+    let from = params.get("from").unwrap().to_rfc3339();
+    let to = params.get("to").unwrap().to_rfc3339();
 
-    let bytes = state.reqwest_client.get(url)
-        .form(&form_data)
+    let query = format!(r#"
+        from(bucket: "db")
+        |> range(start: {from}, stop: {to})
+        |> filter(fn: (r) => r._measurement == "payments")
+        |> group(columns: ["payment_processor_id"])
+        |> aggregateWindow(
+            every: v.windowPeriod,
+            fn: (tables) => tables
+                |> map(fn: (r) => ({{
+                    r with
+                    total_requests: 1.0,
+                    total_amount: r._value
+                }}))
+                |> sum(columns: ["total_requests", "total_amount"])
+            )
+        |> yield(name: "result")
+    "#);
+
+    let url = format!("{db_url}/api/v2/query?org=myorg", db_url = state.db_url);
+
+    let res = state.reqwest_client.post(url)
+        .header("Authorization", "Token sec-token")
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/vnd.flux")
+        .body(query)
         .send()
         .await
-        .expect("error querying summary")
-        .bytes()
-        .await
-        .expect("error getting summary bytes");
+        .expect("error querying summary");
 
-    let json = serde_json::from_slice::<serde_json::Value>(&bytes).expect("error deserializing summary");
+    let res_status = res.status().as_u16();
+    let res_text = res.text().await.unwrap();
 
-    let values = json.get("results").unwrap()
-        .as_array().unwrap()
-        .get(0).unwrap()
-        .as_object().unwrap()
-        .get("values").unwrap()
-        .as_array().unwrap();
+    println!("Got influxql response: {res_status} - {res_text}");
+
+    let json = serde_json::from_str::<serde_json::Value>(&res_text).expect("error deserializing summary");
+    let empty_array = &json!([]);
+    let empty_vec = &Vec::new();
+    let empty_json = &json!({});
+    let empty_map = &serde_json::Map::new();
+
+    let values = json.get("results").unwrap_or_else(|| empty_array)
+        .as_array().unwrap_or_else(|| empty_vec)
+        .get(0).unwrap_or_else(|| empty_json)
+        .as_object().unwrap_or_else(|| empty_map)
+        .get("values").unwrap_or_else(|| empty_array)
+        .as_array().unwrap_or_else(|| empty_vec);
 
     let mut default = PaymentsSummaryDetails::default();
     let mut fallback = PaymentsSummaryDetails::default();

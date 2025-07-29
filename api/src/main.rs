@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::{routing, Router};
 use tokio::net::UnixDatagram;
 
