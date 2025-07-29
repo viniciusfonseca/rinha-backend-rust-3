@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
     let purge_statement = psql_client.prepare("DELETE FROM PAYMENTS").await?;
-    let (tx, rx) = async_channel::bounded(16000);
+    let (tx, rx) = async_channel::unbounded();
 
     let state = ApiState {
         tx,
@@ -62,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Err(e) => break eprintln!("Error receiving from channel: {e}"),
                 }
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
             Ok::<(), anyhow::Error>(())
         });

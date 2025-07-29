@@ -10,13 +10,13 @@ services:
     depends_on:
       - worker
     environment:
-      CHANNEL_THREADS: 5
+      CHANNEL_THREADS: 2
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
         limits:
           cpus: "0.15"
-          memory: "10MB"
+          memory: "20MB"
     volumes:
       - sockets:/tmp/sockets
 
@@ -35,8 +35,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      CHANNEL_THREADS: 20
-      WORKER_THREADS: 50
+      CHANNEL_THREADS: 4
+      WORKER_THREADS: 2
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
@@ -91,7 +91,7 @@ services:
       resources:
         limits:
           cpus: '0.8'
-          memory: '250MB'
+          memory: '230MB'
 
 networks:
   backend:

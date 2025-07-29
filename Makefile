@@ -30,7 +30,7 @@ start-backend-build:
 start-backend-build-detached:
 	docker compose down
 	docker compose up --build -d
-	sleep 10
+	sleep 15
 
 start-backend:
 	docker compose down
