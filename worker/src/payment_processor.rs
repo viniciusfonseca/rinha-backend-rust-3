@@ -1,4 +1,4 @@
-use std::{sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Instant};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -62,7 +62,6 @@ impl WorkerState {
         &self,
         payment_processor_id: &PaymentProcessorIdentifier,
         failing: Option<bool>,
-        min_response_time: Option<f64>
     ) {
     
         let payment_processor = match payment_processor_id {
@@ -129,14 +128,12 @@ impl WorkerState {
             requested_at,
         };
 
-        let start = Instant::now();
         let response = self.reqwest_client
                 .post(format!("{url}/payments"))
                 .header("Content-Type", "application/json")
                 .body(serde_json::to_string(&body)?)
                 .send()
                 .await?;
-        let elapsed = start.elapsed();
 
         let response_status = response.status().as_u16();
 
@@ -146,12 +143,12 @@ impl WorkerState {
         }
 
         if response.status().as_u16() >= 500 {
-            self.update_payment_processor_state(id, Some(true), Some(elapsed.as_secs_f64()));
+            self.update_payment_processor_state(id, Some(true));
             _ = &self.update_preferred_payment_processor();
             return Err(anyhow::Error::msg("Payment processor returned error"));
         }
 
-        self.update_payment_processor_state(id, Some(false), Some(elapsed.as_secs_f64()));
+        self.update_payment_processor_state(id, Some(false));
         _ = &self.update_preferred_payment_processor();
 
         Ok((id, requested_at))
