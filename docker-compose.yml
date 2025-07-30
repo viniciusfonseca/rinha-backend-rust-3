@@ -68,7 +68,7 @@ services:
           memory: '20MB'
 
   postgres:
-    image: postgres:latest
+    image: timescale/timescaledb-ha:pg17
     hostname: db
     environment:
       POSTGRES_USER: postgres
