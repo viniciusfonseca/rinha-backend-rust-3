@@ -4,7 +4,6 @@ use rust_decimal::Decimal;
 
 use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::Storage};
 
-mod atomicf64;
 mod health_check;
 mod payment_processor;
 mod storage;
@@ -33,13 +32,11 @@ async fn main() -> anyhow::Result<()> {
     let default_payment_processor = PaymentProcessor::new(
         PaymentProcessorIdentifier::Default,
         std::env::var("PAYMENT_PROCESSOR_URL_DEFAULT")?,
-        0.05
     );
 
     let fallback_payment_processor = PaymentProcessor::new(
         PaymentProcessorIdentifier::Fallback,
         std::env::var("PAYMENT_PROCESSOR_URL_FALLBACK")?,
-        0.15
     );
 
     let (tx, rx) = async_channel::bounded(16000);
