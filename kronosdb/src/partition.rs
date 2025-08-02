@@ -52,7 +52,7 @@ impl Partition {
 
     pub async fn persist_to_disk(&self) -> anyhow::Result<()> {
 
-        if !self.should_persist.load(std::sync::atomic::Ordering::Relaxed) {
+        if !self.should_persist.load(Ordering::Relaxed) {
             return Ok(());
         }
 
@@ -63,8 +63,8 @@ impl Partition {
         for (timestamp, record) in self.records.iter() {
             let data = format!("{},{},{}",
                 timestamp,
-                record.sum.load(std::sync::atomic::Ordering::SeqCst),
-                record.count.load(std::sync::atomic::Ordering::SeqCst),
+                record.sum.load(Ordering::SeqCst),
+                record.count.load(Ordering::SeqCst),
             );
             contents.push_str(&data);
             contents.push('\n');

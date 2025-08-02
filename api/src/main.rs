@@ -1,4 +1,5 @@
 use axum::{routing, Router};
+use kronosdb::Storage;
 use tokio::net::UnixDatagram;
 
 mod payments;
@@ -11,6 +12,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(Clone)]
 struct ApiState {
     tx: async_channel::Sender<(String, f64)>,
+    default_storage: Storage,
+    fallback_storage: Storage
 }
 
 #[tokio::main]
@@ -20,6 +23,8 @@ async fn main() -> anyhow::Result<()> {
 
     let state = ApiState {
         tx,
+        default_storage: Storage::connect("/tmp/storage/default".to_string()),
+        fallback_storage: Storage::connect("/tmp/storage/fallback".to_string())
     };
     
     let channel_threads = std::env::var("CHANNEL_THREADS")

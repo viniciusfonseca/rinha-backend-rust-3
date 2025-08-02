@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use axum::{extract::Query, Json};
+use axum::{extract::{Query, State}, Json};
 use chrono::{DateTime, Utc};
-use kronosdb::ReadOnlyStorage;
 use serde::Serialize;
+
+use crate::ApiState;
 
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -19,14 +20,11 @@ pub struct PaymentsSummary {
 }
 
 #[axum::debug_handler]
-pub async fn summary(Query(params): Query<HashMap<String, DateTime<Utc>>>) -> Json<PaymentsSummary> {
+pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> Json<PaymentsSummary> {
 
-    let default_storage = ReadOnlyStorage::connect("/tmp/storage/default".to_string());
-    let fallback_storage = ReadOnlyStorage::connect("/tmp/storage/fallback".to_string());
-    
     if let (Ok((default_sum, default_count)), Ok((fallback_sum, fallback_count))) = tokio::join!(
-        default_storage.query_diff_from_fs(params.get("from").unwrap().clone(), params.get("to").unwrap().clone()),
-        fallback_storage.query_diff_from_fs(params.get("from").unwrap().clone(), params.get("to").unwrap().clone()),
+        state.default_storage.query_diff_from_fs(params.get("from").unwrap().clone(), params.get("to").unwrap().clone()),
+        state.fallback_storage.query_diff_from_fs(params.get("from").unwrap().clone(), params.get("to").unwrap().clone()),
     ) {
         Json(PaymentsSummary {
             default: PaymentsSummaryDetails {
