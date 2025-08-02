@@ -10,7 +10,6 @@ services:
     depends_on:
       - worker
     environment:
-      DATABASE_URL: http://influxdb:8086
       BACKOFF_CHANNEL: 5
       CHANNEL_THREADS: 2
     deploy:
@@ -20,6 +19,7 @@ services:
           memory: "20MB"
     volumes:
       - sockets:/tmp/sockets
+      - storage:/tmp/storage
 
   api02:
     <<: *api
@@ -32,11 +32,7 @@ services:
     networks:
       - payment-processor
       - backend
-    depends_on:
-      influxdb:
-        condition: service_healthy
     environment:
-      DATABASE_URL: http://influxdb:8086
       CHANNEL_THREADS: 4
       WORKER_THREADS: 2
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
@@ -48,6 +44,7 @@ services:
           memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
+      - storage:/tmp/storage
 
   nginx:
     image: nginx:latest
@@ -67,38 +64,6 @@ services:
           cpus: '0.2'
           memory: '20MB'
 
-  influxdb:
-    image: influxdb:2.7
-    hostname: influxdb
-    volumes:
-      - type: volume
-        source: influxdb2-data
-        target: /var/lib/influxdb2
-      - type: volume
-        source: influxdb2-config
-        target: /etc/influxdb2
-    ports:
-      - "8086:8086"
-    networks:
-      - backend
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD: 12345678
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: sec-token
-      DOCKER_INFLUXDB_INIT_ORG: myorg
-      DOCKER_INFLUXDB_INIT_BUCKET: db
-    healthcheck:
-      test: "curl -f http://influxdb:8086/ping"
-      interval: 5s
-      timeout: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.8'
-          memory: '230MB'
-
 networks:
   backend:
     name: backend
@@ -108,5 +73,4 @@ networks:
 
 volumes:
   sockets:
-  influxdb2-data:
-  influxdb2-config:
+  storage:

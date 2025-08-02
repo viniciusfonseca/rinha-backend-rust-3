@@ -63,7 +63,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn query_diff_from_fs(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> anyhow::Result<(f64, i64)> {
+    pub async fn query_diff_from_fs(&self, from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Result<(f64, i64)> {
 
         let from_key = from.timestamp();
         let to_key = to.timestamp();

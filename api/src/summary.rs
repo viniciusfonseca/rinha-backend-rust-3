@@ -22,23 +22,38 @@ pub struct PaymentsSummary {
 #[axum::debug_handler]
 pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> Json<PaymentsSummary> {
 
-    if let (Ok((default_sum, default_count)), Ok((fallback_sum, fallback_count))) = tokio::join!(
-        state.default_storage.query_diff_from_fs(params.get("from").unwrap().clone(), params.get("to").unwrap().clone()),
-        state.fallback_storage.query_diff_from_fs(params.get("from").unwrap().clone(), params.get("to").unwrap().clone()),
-    ) {
-        Json(PaymentsSummary {
-            default: PaymentsSummaryDetails {
-                total_requests: default_count,
-                total_amount: default_sum
-            },
-            fallback: PaymentsSummaryDetails {
-                total_requests: fallback_count,
-                total_amount: fallback_sum
-            }
-        })
-    }
-    else {
-        Json(PaymentsSummary::default())
-    }
+    let from = params.get("from").unwrap();
+    let to = params.get("to").unwrap();
 
+    let (default_query_result, fallback_query_result) = tokio::join!(
+        state.default_storage.query_diff_from_fs(&from, &to),
+        state.fallback_storage.query_diff_from_fs(&from, &to),
+    );
+    
+    let default = match default_query_result {
+        Ok((sum, count)) => PaymentsSummaryDetails {
+            total_requests: count,
+            total_amount: sum
+        },
+        Err(e) => {
+            eprintln!("Error querying default storage: {}", e);
+            PaymentsSummaryDetails::default()
+        }
+    };
+
+    let fallback = match fallback_query_result {
+        Ok((sum, count)) => PaymentsSummaryDetails {
+            total_requests: count,
+            total_amount: sum
+        },
+        Err(e) => {
+            eprintln!("Error querying fallback storage: {}", e);
+            PaymentsSummaryDetails::default()
+        }
+    };
+
+    Json(PaymentsSummary {
+        default,
+        fallback,
+    })
 }
