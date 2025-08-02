@@ -15,6 +15,7 @@ rust-version = "1.88.0"
 anyhow = "1.0.98"
 async-channel = "2.5.0"
 chrono = { version = "0.4.41", features = ["serde"] }
+futures = "0.3"
 mimalloc = "0.1.47"
 reqwest = { version = "0.12", default-features = false }
 scc = "2.3.4"
