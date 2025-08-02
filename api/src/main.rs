@@ -11,19 +11,15 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(Clone)]
 struct ApiState {
     tx: async_channel::Sender<(String, f64)>,
-    db_url: String,
-    reqwest_client: reqwest::Client,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
-    let (tx, rx) = async_channel::bounded(16000);
+    let (tx, rx) = async_channel::unbounded();
 
     let state = ApiState {
         tx,
-        db_url: std::env::var("DATABASE_URL")?,
-        reqwest_client: reqwest::Client::new(),
     };
     
     let channel_threads = std::env::var("CHANNEL_THREADS")

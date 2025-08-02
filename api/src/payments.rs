@@ -15,7 +15,7 @@ pub async fn enqueue_payment(State(state): State<ApiState>, Json(payload): Json<
     StatusCode::ACCEPTED
 }
 
-pub async fn purge_payments(State(state): State<ApiState>) -> StatusCode {
+pub async fn purge_payments() -> StatusCode {
     // if let Err(e) = state.psql_client.execute(&state.purge_statement, &[]).await {
     //     eprintln!("Error purging payments: {}", e);
     //     return StatusCode::INTERNAL_SERVER_ERROR;

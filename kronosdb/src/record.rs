@@ -1,7 +1,5 @@
 use std::sync::{atomic::AtomicI64, Arc};
 
-use chrono::{DateTime, Utc};
-
 use crate::atomicf64::AtomicF64;
 
 #[derive(Clone)]

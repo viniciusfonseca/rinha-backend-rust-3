@@ -7,8 +7,9 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-channel = { workspace = true }
-axum = "0.8.4"
+axum = { version = "0.8.4", features = ["macros"] }
 chrono = { workspace = true }
+kronosdb = { workspace = true }
 mimalloc = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

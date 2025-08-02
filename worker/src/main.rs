@@ -1,5 +1,7 @@
 use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 
+use kronosdb::Storage;
+
 use crate::payment_processor::{PaymentProcessor, PaymentProcessorIdentifier};
 
 mod atomicf64;
@@ -13,13 +15,14 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Clone)]
 struct WorkerState {
-    pub db_url: String,
     pub reqwest_client: reqwest::Client,
     pub default_payment_processor: PaymentProcessor,
     pub fallback_payment_processor: PaymentProcessor,
     pub preferred_payment_processor: Arc<AtomicU16>,
     pub signal_tx: async_channel::Sender<()>,
     pub consuming_payments: Arc<AtomicBool>,
+    pub default_storage: Storage,
+    pub fallback_storage: Storage
 }
 
 #[tokio::main]
@@ -44,14 +47,31 @@ async fn main() -> anyhow::Result<()> {
     let (tx, rx) = async_channel::bounded(16000);
     let (signal_tx, signal_rx) = async_channel::bounded(worker_threads);
 
+    let default_storage = Storage::connect("/tmp/storage/default".to_string());
+    let fallback_storage = Storage::connect("/tmp/storage/fallback".to_string());
+
+    let default_storage_async = default_storage.clone();
+    let fallback_storage_async = fallback_storage.clone();
+
+    tokio::spawn(async move {
+        loop {
+            _ = tokio::join!(
+                default_storage_async.persist_to_disk(),
+                fallback_storage_async.persist_to_disk(),
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    });
+
     let state = WorkerState {
-        db_url: std::env::var("DATABASE_URL")?,
         reqwest_client: reqwest::Client::new(),
         default_payment_processor,
         fallback_payment_processor,
         preferred_payment_processor: Arc::new(AtomicU16::new(0)),
         signal_tx,
         consuming_payments: Arc::new(AtomicBool::new(true)),
+        default_storage,
+        fallback_storage
     };
 
     // state.init_db().await?;
@@ -78,7 +98,6 @@ async fn main() -> anyhow::Result<()> {
                     Ok(size) => {
                         if size == 0 { continue }
                         let message = String::from_utf8_lossy(&buf[..size]);
-                        // println!("Received message: {}", message);
                         let split = message.split(':').collect::<Vec<&str>>();
                         let correlation_id = split[0].to_string();
                         let amount: f64 = split[1].parse().unwrap_or(0.0);

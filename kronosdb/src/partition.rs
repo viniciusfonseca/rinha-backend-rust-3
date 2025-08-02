@@ -1,7 +1,7 @@
-use std::sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc};
+use std::{collections::BTreeMap, sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc}};
 
 use chrono::{DateTime, Utc};
-use scc::{ebr::Guard, TreeIndex};
+use tokio::sync::RwLock;
 
 use crate::{atomicf64::AtomicF64, record::Record};
 
@@ -9,8 +9,7 @@ use crate::{atomicf64::AtomicF64, record::Record};
 pub struct Partition {
     key: i64,
     storage_path: String,
-    records: TreeIndex<i64, Record>,
-    guard: Arc<Guard>,
+    records: Arc<RwLock<BTreeMap<i64, Record>>>,
     should_persist: Arc<AtomicBool>,
     pub start_sum: Arc<AtomicF64>,
     sum: Arc<AtomicF64>,
@@ -26,7 +25,6 @@ impl Partition {
             key,
             storage_path: storage_path.clone(),
             records: Default::default(),
-            guard: Default::default(),
             should_persist: Arc::new(AtomicBool::new(false)),
             start_sum: Arc::new(AtomicF64::new(0.0)),
             sum: Arc::new(AtomicF64::new(0.0)),
@@ -36,15 +34,17 @@ impl Partition {
     }
 
     pub async fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
-        _ = self.records.insert_async(timestamp.timestamp_millis(), record).await;
+        let mut records = self.records.write().await;
+        _ = records.insert(timestamp.timestamp_millis(), record);
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);
-        self.update_sum_count()
+        self.update_sum_count().await
     }
 
-    pub fn update_sum_count(&self) -> (f64, i64) {
+    pub async fn update_sum_count(&self) -> (f64, i64) {
         let mut sum = self.start_sum.load(Ordering::SeqCst);
         let mut count = self.start_count.load(Ordering::SeqCst);
-        for (_, record) in self.records.iter(&self.guard) {
+        let read_guard = self.records.read().await;
+        for (_, record) in read_guard.iter() {
             sum += record.amount.load(Ordering::SeqCst);
             self.sum.store(sum, Ordering::SeqCst);
             count += 1;
@@ -65,7 +65,8 @@ impl Partition {
 
         let mut contents = String::new();
 
-        for (timestamp, record) in self.records.iter(&self.guard) {
+        let read_guard = self.records.read().await;
+        for (timestamp, record) in read_guard.iter() {
             let data = format!("{},{},{}",
                 timestamp,
                 record.sum.load(std::sync::atomic::Ordering::SeqCst),
