@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc}};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::RwLock;
 
 use crate::{atomicf64::AtomicF64, record::Record};
 
@@ -9,7 +8,7 @@ use crate::{atomicf64::AtomicF64, record::Record};
 pub struct Partition {
     key: i64,
     storage_path: String,
-    records: Arc<RwLock<BTreeMap<i64, Record>>>,
+    records: BTreeMap<i64, Record>,
     should_persist: Arc<AtomicBool>,
     pub start_sum: Arc<AtomicF64>,
     sum: Arc<AtomicF64>,
@@ -33,9 +32,8 @@ impl Partition {
         }
     }
 
-    pub async fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
-        let mut records = self.records.write().await;
-        _ = records.insert(timestamp.timestamp_millis(), record);
+    pub async fn insert_record(&mut self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
+        _ = self.records.insert(timestamp.timestamp_millis(), record);
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);
         self.update_sum_count().await
     }
@@ -43,12 +41,9 @@ impl Partition {
     pub async fn update_sum_count(&self) -> (f64, i64) {
         let mut sum = self.start_sum.load(Ordering::SeqCst);
         let mut count = self.start_count.load(Ordering::SeqCst);
-        let read_guard = self.records.read().await;
-        for (_, record) in read_guard.iter() {
-            sum += record.amount.load(Ordering::SeqCst);
-            self.sum.store(sum, Ordering::SeqCst);
-            count += 1;
-            self.count.store(count, Ordering::SeqCst);
+        for (_, record) in self.records.iter() {
+            sum = record.sum.fetch_add(record.amount, Ordering::SeqCst) + record.amount;
+            count = record.count.fetch_add(1, Ordering::SeqCst) + 1;
         }
         self.sum.store(sum, Ordering::SeqCst);
         self.count.store(count, Ordering::SeqCst);
@@ -65,8 +60,7 @@ impl Partition {
 
         let mut contents = String::new();
 
-        let read_guard = self.records.read().await;
-        for (timestamp, record) in read_guard.iter() {
+        for (timestamp, record) in self.records.iter() {
             let data = format!("{},{},{}",
                 timestamp,
                 record.sum.load(std::sync::atomic::Ordering::SeqCst),

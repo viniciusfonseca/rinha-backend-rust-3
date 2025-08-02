@@ -18,4 +18,8 @@ impl AtomicF64 {
     pub fn load(&self, ordering: Ordering) -> f64 {
         f64::from_bits(self.storage.load(ordering))
     }
+
+    pub fn fetch_add(&self, value: f64, ordering: Ordering) -> f64 {
+        f64::from_bits(self.storage.fetch_add(value.to_bits(), ordering))
+    }
 }
