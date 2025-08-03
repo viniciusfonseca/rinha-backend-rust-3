@@ -35,7 +35,7 @@ pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap
     let default = match default_query_result {
         Ok((sum, count)) => PaymentsSummaryDetails {
             total_requests: count,
-            total_amount: sum
+            total_amount: sum / 100.0 * 100.0
         },
         Err(e) => {
             eprintln!("Error querying default storage: {}", e);
@@ -46,7 +46,7 @@ pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap
     let fallback = match fallback_query_result {
         Ok((sum, count)) => PaymentsSummaryDetails {
             total_requests: count,
-            total_amount: sum
+            total_amount: sum / 100.0 * 100.0
         },
         Err(e) => {
             eprintln!("Error querying fallback storage: {}", e);

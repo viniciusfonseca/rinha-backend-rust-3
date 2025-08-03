@@ -10,7 +10,7 @@ services:
     depends_on:
       - worker
     environment:
-      BACKOFF_CHANNEL: 0
+      BACKOFF_CHANNEL: 5
       CHANNEL_THREADS: 2
     deploy:
       resources:
@@ -25,6 +25,10 @@ services:
     <<: *api
     hostname: api02
 
+  api03:
+    <<: *api
+    hostname: api02
+
   worker:
     build:
       context: .
@@ -33,8 +37,8 @@ services:
       - payment-processor
       - backend
     environment:
-      CHANNEL_THREADS: 4
-      WORKER_THREADS: 2
+      CHANNEL_THREADS: 6
+      WORKER_THREADS: 16
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
     deploy:

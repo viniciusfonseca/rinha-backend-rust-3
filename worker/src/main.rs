@@ -35,16 +35,14 @@ async fn main() -> anyhow::Result<()> {
     let default_payment_processor = PaymentProcessor::new(
         PaymentProcessorIdentifier::Default,
         std::env::var("PAYMENT_PROCESSOR_URL_DEFAULT")?,
-        0.05
     );
 
     let fallback_payment_processor = PaymentProcessor::new(
         PaymentProcessorIdentifier::Fallback,
         std::env::var("PAYMENT_PROCESSOR_URL_FALLBACK")?,
-        0.15
     );
 
-    let (tx, rx) = async_channel::bounded(16000);
+    let (tx, rx) = async_channel::unbounded();
     let (signal_tx, signal_rx) = async_channel::bounded(worker_threads);
 
     let default_storage = Storage::connect("/tmp/storage/default".to_string());
@@ -73,8 +71,6 @@ async fn main() -> anyhow::Result<()> {
         default_storage,
         fallback_storage
     };
-
-    // state.init_db().await?;
 
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
@@ -150,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let health_check_interval = tokio::time::Duration::from_secs(5);
+    let health_check_interval = tokio::time::Duration::from_secs(1);
 
     loop {
         let (default_health, fallback_health) = tokio::join!(

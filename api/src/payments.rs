@@ -16,9 +16,9 @@ pub async fn enqueue_payment(State(state): State<ApiState>, Json(payload): Json<
 }
 
 pub async fn purge_payments() -> StatusCode {
-    // if let Err(e) = state.psql_client.execute(&state.purge_statement, &[]).await {
-    //     eprintln!("Error purging payments: {}", e);
-    //     return StatusCode::INTERNAL_SERVER_ERROR;
-    // }
+    _ = tokio::join!(
+        tokio::fs::remove_file("/tmp/storage/default/partitions"),
+        tokio::fs::remove_file("/tmp/storage/fallback/partitions"),
+    );
     StatusCode::OK
 }

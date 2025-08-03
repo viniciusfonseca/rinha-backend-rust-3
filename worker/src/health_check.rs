@@ -6,7 +6,6 @@ use crate::{payment_processor::PaymentProcessorIdentifier, WorkerState};
 #[serde(rename_all = "camelCase")]
 struct PaymentProcessorHealthResponse {
     pub failing: bool,
-    pub min_response_time: f64
 }
 
 impl WorkerState {
@@ -27,17 +26,21 @@ impl WorkerState {
 
         let url = &payment_processor.url;
 
-        let body = self.reqwest_client.get(format!("{url}/payments/service-health"))
+        let res = self.reqwest_client.get(format!("{url}/payments/service-health"))
             .send()
-            .await?
+            .await?;
+
+        if !res.status().is_success() {
+            return Ok(());
+        }
+
+        let body = res
             .bytes()
             .await?;
 
         let response = serde_json::from_slice::<PaymentProcessorHealthResponse>(&body)?;
 
         payment_processor.update_failing(response.failing);
-        payment_processor.update_min_response_time(response.min_response_time);
-        payment_processor.update_efficiency((1000.0 / f64::max(response.min_response_time, 1.0)) / payment_processor.tax);
 
         Ok(())
     }
