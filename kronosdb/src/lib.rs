@@ -1,4 +1,4 @@
-use std::{collections::{btree_map::Entry, BTreeMap}, sync::Arc};
+use std::{collections::{btree_map::Entry, BTreeMap}, sync::Arc, time::Instant};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
@@ -58,32 +58,35 @@ impl Storage {
     pub async fn persist_to_disk(&self) -> anyhow::Result<()> {
 
         let guard = self.partitions.read().await;
-
-        futures::future::join_all(
-            guard.iter()
-                .map(|(_, partition)| partition.persist_to_disk())
-        ).await;
+        let mut partitions = Vec::new();
+        let tasks = guard.iter()
+            .map(|(key, partition)| { partitions.push(key.to_string()); partition.persist_to_disk() })
+            .collect::<Vec<_>>();
+        
+        _ = tokio::join!(
+            futures::future::join_all(tasks),
+            tokio::fs::write(format!("{}/partitions", self.storage_path), partitions.join("\n"))
+        );
 
         Ok(())
     }
 
     pub async fn query_diff_from_fs(&self, from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Result<(f64, i64)> {
 
-        let from_key = from.timestamp_millis();
-        let to_key = to.timestamp_millis();
+        let from_key = from.timestamp();
+        let to_key = to.timestamp();
 
-        let mut partition_keys = Vec::new();
-        let mut entries = tokio::fs::read_dir(&self.storage_path).await?;
-
-        while let Some(entry) = entries.next_entry().await? {
-
-            let partition_key = entry.file_name().to_string_lossy().parse::<i64>()?;
-            if partition_key < from_key || partition_key > to_key {
-                continue;
+        let start = Instant::now();
+        let partition_keys = tokio::fs::read_to_string(format!("{}/partitions", self.storage_path)).await?;
+        println!("read partition keys in {}ms", start.elapsed().as_millis());
+        
+        let mut partition_keys = partition_keys.split('\n').filter(|key| {
+            !key.is_empty() && {
+                let key = key.parse::<i64>().unwrap();
+                key >= from_key && key <= to_key
             }
-
-            partition_keys.push(partition_key);
-        }
+        })
+        .collect::<Vec<_>>();
 
         if partition_keys.is_empty() {
             return Ok((0.0, 0));
@@ -95,34 +98,43 @@ impl Storage {
         let first_partition = iter.next().unwrap();
         let last_partition = iter.last().unwrap_or(first_partition);
 
+        let from_key = from.timestamp_millis();
+        let to_key = to.timestamp_millis();
+
         if let (Ok((first_sum, first_count)), Ok((last_sum, last_count))) = tokio::join!(
             async move {
                 let first_partition_data = tokio::fs::read_to_string(format!("{}/{}", self.storage_path, first_partition)).await?;
-                println!("first_partition_data:");
-                println!("{}", first_partition_data);
                 let records = first_partition_data.split('\n');
+                let mut columns = Vec::new();
                 for record in records {
-                    let columns = record.split(',').collect::<Vec<_>>();
+                    if record.is_empty() {
+                        continue;
+                    }
+                    columns = record.split(',').collect::<Vec<_>>();
                     let timestamp = columns[0].parse::<i64>()?;
                     if timestamp < from_key {
                         continue;
                     }
-                    return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
+                    else { break }
                 }
-                Ok((0.0, 0))
+                return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
             },
             async move {
                 let last_partition_data = tokio::fs::read_to_string(format!("{}/{}", self.storage_path, last_partition)).await?;
                 let records = last_partition_data.split('\n');
-                for record in records {
-                    let columns = record.split(',').collect::<Vec<_>>();
+                let mut columns = Vec::new();
+                for record in records.rev() {
+                    if record.is_empty() {
+                        continue;
+                    }
+                    columns = record.split(',').collect::<Vec<_>>();
                     let timestamp = columns[0].parse::<i64>()?;
                     if timestamp > to_key {
                         continue;
                     }
-                    return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
+                    else { break }
                 }
-                Ok((0.0, 0))
+                return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
             }
         ) {
             return Ok((last_sum - first_sum, last_count - first_count));
@@ -160,9 +172,9 @@ mod tests {
 
         storage.persist_to_disk().await?;
 
-        let (sum, count) = storage.query_diff_from_fs(&timestamp(start), &timestamp(start + 30)).await?;
-        assert_eq!(sum, data * 3.0);
-        assert_eq!(count, 3);
+        let (sum, count) = storage.query_diff_from_fs(&timestamp(start + 10), &timestamp(start + 30)).await?;
+        assert_eq!(sum, data * 2.0);
+        assert_eq!(count, 2);
 
         Ok(())
     }
