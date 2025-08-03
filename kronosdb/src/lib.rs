@@ -5,7 +5,6 @@ use tokio::sync::RwLock;
 
 pub use crate::{partition::Partition, record::Record};
 
-mod atomicf64;
 mod partition;
 mod record;
 
@@ -30,18 +29,23 @@ impl Storage {
         let mut partition_key = timestamp.timestamp();
 
         let mut guard = self.partitions.write().await;
+
+        let (start_sum, start_count) = match guard.last_entry() {
+            Some(entry) => (entry.get().sum, entry.get().count),
+            None => (0.0, 0)
+        };
         
         let (mut sum, mut count) = guard.entry(partition_key)
-            .or_insert_with(|| Partition::new(&self.storage_path, partition_key))
+            .or_insert_with(|| Partition::new(&self.storage_path, partition_key, start_sum, start_count))
             .insert_record(timestamp, Record::new(data)).await;
 
         loop {
             partition_key += 1;
             match guard.entry(partition_key) {
-                Entry::Occupied(partition) => {
-                    let partition = partition.get();
-                    partition.start_sum.store(sum, std::sync::atomic::Ordering::SeqCst);
-                    partition.start_count.store(count, std::sync::atomic::Ordering::SeqCst);
+                Entry::Occupied(mut partition) => {
+                    let partition = partition.get_mut();
+                    partition.start_sum = sum;
+                    partition.start_count = count;
                     (sum, count) = partition.update_sum_count().await;
                 },
                 Entry::Vacant(_) => break,
@@ -65,8 +69,8 @@ impl Storage {
 
     pub async fn query_diff_from_fs(&self, from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Result<(f64, i64)> {
 
-        let from_key = from.timestamp();
-        let to_key = to.timestamp();
+        let from_key = from.timestamp_millis();
+        let to_key = to.timestamp_millis();
 
         let mut partition_keys = Vec::new();
         let mut entries = tokio::fs::read_dir(&self.storage_path).await?;
@@ -81,15 +85,21 @@ impl Storage {
             partition_keys.push(partition_key);
         }
 
+        if partition_keys.is_empty() {
+            return Ok((0.0, 0));
+        }
+
         partition_keys.sort();
         let mut iter = partition_keys.iter();
 
         let first_partition = iter.next().unwrap();
-        let last_partition = iter.last().unwrap();
+        let last_partition = iter.last().unwrap_or(first_partition);
 
         if let (Ok((first_sum, first_count)), Ok((last_sum, last_count))) = tokio::join!(
             async move {
                 let first_partition_data = tokio::fs::read_to_string(format!("{}/{}", self.storage_path, first_partition)).await?;
+                println!("first_partition_data:");
+                println!("{}", first_partition_data);
                 let records = first_partition_data.split('\n');
                 for record in records {
                     let columns = record.split(',').collect::<Vec<_>>();
@@ -121,4 +131,39 @@ impl Storage {
         Ok((0.0, 0))
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+
+    use crate::Storage;
+    
+    fn timestamp(millis: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(millis).unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn test_persistence() -> anyhow::Result<()> {
+
+        let storage_path = "/tmp/kronosdb-test".to_string();
+        let storage = Storage::connect(storage_path);
+
+        let start = 1754176191000 as i64;
+        let data = 19.90;
+
+        storage.insert_data(timestamp(start), data).await?;
+        storage.insert_data(timestamp(start + 10), data).await?;
+        storage.insert_data(timestamp(start + 20), data).await?;
+        storage.insert_data(timestamp(start + 30), data).await?;
+        storage.insert_data(timestamp(start + 40), data).await?;
+
+        storage.persist_to_disk().await?;
+
+        let (sum, count) = storage.query_diff_from_fs(&timestamp(start), &timestamp(start + 30)).await?;
+        assert_eq!(sum, data * 3.0);
+        assert_eq!(count, 3);
+
+        Ok(())
+    }
 }

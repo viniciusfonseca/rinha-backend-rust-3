@@ -122,7 +122,7 @@ impl WorkerState {
 
         let preferred_payment_processor = &self.preferred_payment_processor();
         if preferred_payment_processor.id != new_preferred_payment_processor {
-            println!("Preferred payment processor changing from {:?} to {:?}", preferred_payment_processor.id, new_preferred_payment_processor);
+            // println!("Preferred payment processor changing from {:?} to {:?}", preferred_payment_processor.id, new_preferred_payment_processor);
             self.set_preferred_payment_processor(new_preferred_payment_processor);
         }
 

@@ -128,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
                             match state.process_payment(&event).await {
                                 Ok((payment_processor_id, requested_at)) => {
                                     state.save_payment(event.1, payment_processor_id, requested_at).await?;
-                                    println!("Saved payment: {event:?}");
+                                    // println!("Saved payment: {event:?}");
                                 }
                                 Err(e) => {
                                     eprintln!("Error processing payment: {}", e);
