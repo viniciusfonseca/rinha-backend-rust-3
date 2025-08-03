@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 use axum::{extract::{Query, State}, Json};
 use chrono::{DateTime, Utc};
@@ -25,10 +25,12 @@ pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap
     let from = params.get("from").unwrap();
     let to = params.get("to").unwrap();
 
+    let start = Instant::now();
     let (default_query_result, fallback_query_result) = tokio::join!(
         state.default_storage.query_diff_from_fs(&from, &to),
         state.fallback_storage.query_diff_from_fs(&from, &to),
     );
+    println!("query diff in {}ms", start.elapsed().as_millis());
     
     let default = match default_query_result {
         Ok((sum, count)) => PaymentsSummaryDetails {

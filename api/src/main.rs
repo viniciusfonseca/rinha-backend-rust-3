@@ -19,7 +19,7 @@ struct ApiState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
-    let (tx, rx) = async_channel::unbounded();
+    let (tx, rx) = async_channel::bounded(32768);
 
     let state = ApiState {
         tx,

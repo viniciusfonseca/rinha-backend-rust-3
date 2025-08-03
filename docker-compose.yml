@@ -10,7 +10,7 @@ services:
     depends_on:
       - worker
     environment:
-      BACKOFF_CHANNEL: 5
+      BACKOFF_CHANNEL: 0
       CHANNEL_THREADS: 2
     deploy:
       resources:

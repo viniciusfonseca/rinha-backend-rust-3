@@ -7,5 +7,6 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
+crossbeam-skiplist = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }

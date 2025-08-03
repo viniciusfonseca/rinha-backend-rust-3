@@ -1,19 +1,20 @@
-use std::{collections::BTreeMap, sync::{atomic::{AtomicBool, Ordering}, Arc}};
+use std::sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc};
 
 use chrono::{DateTime, Utc};
+use crossbeam_skiplist::SkipMap;
 
-use crate::record::Record;
+use crate::{atomicf64::AtomicF64, record::Record};
 
 #[derive(Clone)]
 pub struct Partition {
     key: i64,
     storage_path: String,
-    records: BTreeMap<i64, Record>,
+    records: Arc<SkipMap<i64, Record>>,
     should_persist: Arc<AtomicBool>,
-    pub start_sum: f64,
-    pub sum: f64,
-    pub start_count: i64,
-    pub count: i64
+    pub start_sum: Arc<AtomicF64>,
+    pub sum: Arc<AtomicF64>,
+    pub start_count: Arc<AtomicI64>,
+    pub count: Arc<AtomicI64>,
 }
 
 impl Partition {
@@ -25,30 +26,31 @@ impl Partition {
             storage_path: storage_path.clone(),
             records: Default::default(),
             should_persist: Arc::new(AtomicBool::new(false)),
-            start_sum,
-            sum: start_sum,
-            start_count,
-            count: start_count
+            start_sum: Arc::new(AtomicF64::new(start_sum)),
+            sum: Arc::new(AtomicF64::new(start_sum)),
+            start_count: Arc::new(AtomicI64::new(start_count)),
+            count: Arc::new(AtomicI64::new(start_count)),
         }
     }
 
-    pub async fn insert_record(&mut self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
+    pub async fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
         _ = self.records.insert(timestamp.timestamp_millis(), record);
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);
         self.update_sum_count().await
     }
 
-    pub async fn update_sum_count(&mut self) -> (f64, i64) {
-        let mut sum = self.start_sum;
-        let mut count = self.start_count;
-        for (_, record) in self.records.iter_mut() {
+    pub async fn update_sum_count(&self) -> (f64, i64) {
+        let mut sum = self.start_sum.load(Ordering::SeqCst);
+        let mut count = self.start_count.load(Ordering::SeqCst);
+        for entry in self.records.iter() {
+            let record = entry.value();
             sum += record.amount;
             count += 1;
-            record.sum = sum;
-            record.count = count;
+            record.sum.store(sum, Ordering::SeqCst);
+            record.count.store(count, Ordering::SeqCst);
         }
-        self.sum = sum;
-        self.count = count;
+        self.sum.store(sum, Ordering::SeqCst);
+        self.count.store(count, Ordering::SeqCst);
         (sum, count)
     }
 
@@ -62,11 +64,12 @@ impl Partition {
 
         let mut contents = String::new();
 
-        for (timestamp, record) in self.records.iter() {
+        for entry in self.records.iter() {
+            let (timestamp, record) = (entry.key(), entry.value());
             let data = format!("{},{:.2},{}",
                 timestamp,
-                record.sum,
-                record.count,
+                record.sum.load(Ordering::SeqCst),
+                record.count.load(Ordering::SeqCst),
             );
             contents.push_str(&data);
             contents.push('\n');

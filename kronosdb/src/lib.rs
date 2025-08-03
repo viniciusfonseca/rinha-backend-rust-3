@@ -1,17 +1,18 @@
-use std::{collections::{btree_map::Entry, BTreeMap}, sync::Arc, time::Instant};
+use std::{sync::{atomic::Ordering, Arc}, time::Instant};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::RwLock;
+use crossbeam_skiplist::SkipMap;
 
 pub use crate::{partition::Partition, record::Record};
 
+mod atomicf64;
 mod partition;
 mod record;
 
 #[derive(Clone)]
 pub struct Storage {
     storage_path: String,
-    partitions: Arc<RwLock<BTreeMap<i64, Partition>>>,
+    partitions: Arc<SkipMap<i64, Partition>>,
 }
 
 impl Storage {
@@ -20,53 +21,49 @@ impl Storage {
         std::fs::create_dir_all(&storage_path).unwrap();
         Self {
             storage_path,
-            partitions: Default::default(),
+            partitions: Arc::new(SkipMap::new()),
         }
     }
 
     pub async fn insert_data(&self, timestamp: DateTime<Utc>, data: f64) -> anyhow::Result<()> {
 
-        let mut partition_key = timestamp.timestamp();
+        let partition_key = timestamp.timestamp();
 
-        let mut guard = self.partitions.write().await;
-
-        let (start_sum, start_count) = match guard.last_entry() {
-            Some(entry) => (entry.get().sum, entry.get().count),
+        let (start_sum, start_count) = match self.partitions.back() {
+            Some(entry) => (entry.value().sum.load(Ordering::SeqCst), entry.value().count.load(Ordering::SeqCst)),
             None => (0.0, 0)
         };
         
-        let (mut sum, mut count) = guard.entry(partition_key)
-            .or_insert_with(|| Partition::new(&self.storage_path, partition_key, start_sum, start_count))
+        let (mut sum, mut count) = self.partitions.get_or_insert_with(partition_key,
+            || Partition::new(&self.storage_path, partition_key, start_sum, start_count))
+            .value()
             .insert_record(timestamp, Record::new(data)).await;
 
-        loop {
-            partition_key += 1;
-            match guard.entry(partition_key) {
-                Entry::Occupied(mut partition) => {
-                    let partition = partition.get_mut();
-                    partition.start_sum = sum;
-                    partition.start_count = count;
-                    (sum, count) = partition.update_sum_count().await;
-                },
-                Entry::Vacant(_) => break,
+        let mut updating = false;
+        for entry in self.partitions.iter() {
+            if updating {
+                let partition = entry.value();
+                partition.start_sum.store(sum, Ordering::SeqCst);
+                partition.start_count.store(count, Ordering::SeqCst);
+                (sum, count) = partition.update_sum_count().await;
             }
+            updating = *entry.key() == partition_key;
         }
 
         Ok(())
     }
 
     pub async fn persist_to_disk(&self) -> anyhow::Result<()> {
-
-        let guard = self.partitions.read().await;
-        let mut partitions = Vec::new();
-        let tasks = guard.iter()
-            .map(|(key, partition)| { partitions.push(key.to_string()); partition.persist_to_disk() })
-            .collect::<Vec<_>>();
         
-        _ = tokio::join!(
-            futures::future::join_all(tasks),
-            tokio::fs::write(format!("{}/partitions", self.storage_path), partitions.join("\n"))
-        );
+        let mut partitions = Vec::new();
+
+        for entry in self.partitions.iter() {
+            partitions.push(entry.key().to_string());
+            let partition = entry.value();
+            partition.persist_to_disk().await?;
+        }
+
+        tokio::fs::write(format!("{}/partitions", self.storage_path), partitions.join("\n")).await?;
 
         Ok(())
     }
