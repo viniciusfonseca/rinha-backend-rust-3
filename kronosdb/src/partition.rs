@@ -2,7 +2,7 @@ use std::sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc};
 
 use chrono::{DateTime, Timelike, Utc};
 use crossbeam_skiplist::SkipMap;
-use uuid::{NoContext, Timestamp};
+use uuid::{NoContext, Timestamp, Uuid};
 
 use crate::{atomicf64::AtomicF64, record::Record};
 
@@ -58,13 +58,13 @@ impl Partition {
 
     pub async fn persist_to_disk(&self) -> anyhow::Result<()> {
 
-        if !self.should_persist.load(Ordering::Relaxed) {
+        if !self.should_persist.load(Ordering::Relaxed) || self.records.is_empty() {
             return Ok(());
         }
 
         let partition_fs_path = format!("{}/{}", self.storage_path, self.key);
 
-        let contents = self.records.iter()
+        let mut contents = self.records.iter()
             .map(|entry| {
                 let (timestamp, record) = (entry.key(), entry.value());
                 let data = format!("{},{:.2},{}",
@@ -74,10 +74,22 @@ impl Partition {
                 );
                 data
             })
-            .collect::<Vec<String>>()
-            .join("\n");
+            .collect::<Vec<String>>();
 
-        tokio::fs::write(partition_fs_path, contents).await?;
+        let first_record = self.records.iter().next().unwrap();
+        let (seconds, nanos) = Uuid::from_u128(*first_record.key()).get_timestamp().unwrap().to_unix();
+        let nanos = if nanos == 0 { 999_999_999 } else { nanos } - 1;
+        let seconds = if nanos == 999_999_999 { seconds - 1 } else { seconds };
+        let timestamp = Timestamp::from_unix(NoContext, seconds, nanos);
+        let id = Uuid::new_v7(timestamp);
+
+        contents.insert(0, format!("{},{:.2},{}",
+            id.as_u128(),
+            self.start_sum.load(Ordering::SeqCst),
+            self.start_count.load(Ordering::SeqCst)
+        ));
+
+        tokio::fs::write(partition_fs_path, contents.join("\n")).await?;
         
         self.should_persist.store(false, std::sync::atomic::Ordering::Relaxed);
 

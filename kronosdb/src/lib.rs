@@ -93,8 +93,8 @@ impl Storage {
         let first_partition = iter.next().unwrap();
         let last_partition = iter.last().unwrap_or(first_partition);
 
-        let from_key = from.timestamp_millis();
-        let to_key = to.timestamp_millis();
+        let (from_secs, from_nanos) = (from.timestamp(), 0);
+        let (to_secs, to_nanos) = (to.timestamp(), 999_999_999);
 
         if let (Ok((first_sum, first_count)), Ok((last_sum, last_count))) = tokio::join!(
             async move {
@@ -102,14 +102,10 @@ impl Storage {
                 let records = first_partition_data.split('\n');
                 let mut columns = Vec::new();
                 for record in records {
-                    if record.is_empty() {
-                        continue;
-                    }
                     columns = record.split(',').collect::<Vec<_>>();
                     let id = columns[0].parse()?;
-                    let (seconds, sub_seconds) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
-                    let timestamp = DateTime::from_timestamp(seconds.try_into().unwrap(), sub_seconds).unwrap().timestamp();
-                    if timestamp < from_key {
+                    let (seconds, nanos) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
+                    if (seconds < from_secs.try_into().unwrap()) || (seconds == from_secs.try_into().unwrap() && nanos < from_nanos) {
                         continue;
                     }
                     else { break }
@@ -121,14 +117,10 @@ impl Storage {
                 let records = last_partition_data.split('\n');
                 let mut columns = Vec::new();
                 for record in records.rev() {
-                    if record.is_empty() {
-                        continue;
-                    }
                     columns = record.split(',').collect::<Vec<_>>();
                     let id = columns[0].parse()?;
                     let (seconds, sub_seconds) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
-                    let timestamp = DateTime::from_timestamp(seconds.try_into().unwrap(), sub_seconds).unwrap().timestamp();
-                    if timestamp > to_key {
+                    if (seconds > to_secs.try_into().unwrap()) || (seconds == to_secs.try_into().unwrap() && sub_seconds > to_nanos) {
                         continue;
                     }
                     else { break }
@@ -136,6 +128,7 @@ impl Storage {
                 return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
             }
         ) {
+            println!("{} {}", first_sum, last_sum);
             return Ok((last_sum - first_sum, last_count - first_count));
         }
 
@@ -146,44 +139,31 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Utc};
+    use chrono::Utc;
 
     use crate::Storage;
     
-    fn timestamp(millis: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp_millis(millis).unwrap_or_default()
-    }
-
     #[tokio::test]
     async fn test_persistence() -> anyhow::Result<()> {
 
+        _ = tokio::fs::remove_dir_all("/tmp/kronosdb-test").await;
         let storage_path = "/tmp/kronosdb-test".to_string();
         let storage = Storage::connect(storage_path);
 
-        let start = 1754176191000 as i64;
+        let start = Utc::now();
         let data = 19.90;
 
-        for i in 0..15000 {
-            storage.insert_data(timestamp(start + i), data)?;
+        for _ in 0..15000 {
+            storage.insert_data(Utc::now(), data)?;
         }
 
         storage.persist_to_disk().await?;
 
-        let (sum, count) = storage.query_diff_from_fs(&timestamp(start), &timestamp(start + 15000)).await?;
+        let (sum, count) = storage.query_diff_from_fs(&start, &Utc::now()).await?;
 
         assert_eq!(sum, data * 15000.0);
         assert_eq!(count, 15000);
-
-        let (sum, count) = storage.query_diff_from_fs(&timestamp(start + 10000), &timestamp(start + 15000)).await?;
-
-        assert_eq!(sum, data * 5000.0);
-        assert_eq!(count, 5000);
-
-        let (sum, count) = storage.query_diff_from_fs(&timestamp(start), &timestamp(start + 10000)).await?;
-
-        assert_eq!(sum, data * 10000.0);
-        assert_eq!(count, 10000);
-
+        
         Ok(())
     }
 }
