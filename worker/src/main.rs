@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("PAYMENT_PROCESSOR_URL_FALLBACK")?,
     );
 
-    let (tx, rx) = async_channel::bounded(16000);
+    let (tx, rx) = async_channel::unbounded();
     let (signal_tx, signal_rx) = async_channel::bounded(worker_threads);
 
     let state = WorkerState {
