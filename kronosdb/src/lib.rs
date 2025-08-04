@@ -1,4 +1,4 @@
-use std::{sync::{atomic::Ordering, Arc}, time::Instant};
+use std::sync::{atomic::Ordering, Arc};
 
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
@@ -25,7 +25,7 @@ impl Storage {
         }
     }
 
-    pub async fn insert_data(&self, timestamp: DateTime<Utc>, data: f64) -> anyhow::Result<()> {
+    pub fn insert_data(&self, timestamp: DateTime<Utc>, data: f64) -> anyhow::Result<()> {
 
         let partition_key = timestamp.timestamp();
 
@@ -37,7 +37,7 @@ impl Storage {
         let (mut sum, mut count) = self.partitions.get_or_insert_with(partition_key,
             || Partition::new(&self.storage_path, partition_key, start_sum, start_count))
             .value()
-            .insert_record(timestamp, Record::new(data)).await;
+            .insert_record(timestamp, Record::new(data));
 
         let mut updating = false;
         for entry in self.partitions.iter() {
@@ -45,7 +45,7 @@ impl Storage {
                 let partition = entry.value();
                 partition.start_sum.store(sum, Ordering::SeqCst);
                 partition.start_count.store(count, Ordering::SeqCst);
-                (sum, count) = partition.update_sum_count().await;
+                (sum, count) = partition.update_sum_count();
             }
             updating = *entry.key() == partition_key;
         }
@@ -72,10 +72,7 @@ impl Storage {
 
         let from_key = from.timestamp();
         let to_key = to.timestamp();
-
-        let start = Instant::now();
         let partition_keys = tokio::fs::read_to_string(format!("{}/partitions", self.storage_path)).await?;
-        println!("read partition keys in {}ms", start.elapsed().as_millis());
         
         let mut partition_keys = partition_keys.split('\n').filter(|key| {
             !key.is_empty() && {
@@ -161,17 +158,26 @@ mod tests {
         let start = 1754176191000 as i64;
         let data = 19.90;
 
-        storage.insert_data(timestamp(start), data).await?;
-        storage.insert_data(timestamp(start + 10), data).await?;
-        storage.insert_data(timestamp(start + 20), data).await?;
-        storage.insert_data(timestamp(start + 30), data).await?;
-        storage.insert_data(timestamp(start + 40), data).await?;
+        for i in 0..15000 {
+            storage.insert_data(timestamp(start + i), data)?;
+        }
 
         storage.persist_to_disk().await?;
 
-        let (sum, count) = storage.query_diff_from_fs(&timestamp(start + 10), &timestamp(start + 30)).await?;
-        assert_eq!(sum, data * 2.0);
-        assert_eq!(count, 2);
+        let (sum, count) = storage.query_diff_from_fs(&timestamp(start), &timestamp(start + 15000)).await?;
+
+        assert_eq!(sum, data * 15000.0);
+        assert_eq!(count, 15000);
+
+        let (sum, count) = storage.query_diff_from_fs(&timestamp(start + 10000), &timestamp(start + 15000)).await?;
+
+        assert_eq!(sum, data * 5000.0);
+        assert_eq!(count, 5000);
+
+        let (sum, count) = storage.query_diff_from_fs(&timestamp(start), &timestamp(start + 10000)).await?;
+
+        assert_eq!(sum, data * 10000.0);
+        assert_eq!(count, 10000);
 
         Ok(())
     }

@@ -20,7 +20,6 @@ pub struct Partition {
 impl Partition {
 
     pub fn new(storage_path: &String, key: i64, start_sum: f64, start_count: i64) -> Self {
-
         Self {
             key,
             storage_path: storage_path.clone(),
@@ -33,13 +32,14 @@ impl Partition {
         }
     }
 
-    pub async fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
+    pub fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
         _ = self.records.insert(timestamp.timestamp_millis(), record);
+        let (sum, count) = self.update_sum_count();
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);
-        self.update_sum_count().await
+        (sum, count)
     }
 
-    pub async fn update_sum_count(&self) -> (f64, i64) {
+    pub fn update_sum_count(&self) -> (f64, i64) {
         let mut sum = self.start_sum.load(Ordering::SeqCst);
         let mut count = self.start_count.load(Ordering::SeqCst);
         for entry in self.records.iter() {
@@ -62,18 +62,18 @@ impl Partition {
 
         let partition_fs_path = format!("{}/{}", self.storage_path, self.key);
 
-        let mut contents = String::new();
-
-        for entry in self.records.iter() {
-            let (timestamp, record) = (entry.key(), entry.value());
-            let data = format!("{},{:.2},{}",
-                timestamp,
-                record.sum.load(Ordering::SeqCst),
-                record.count.load(Ordering::SeqCst),
-            );
-            contents.push_str(&data);
-            contents.push('\n');
-        }
+        let contents = self.records.iter()
+            .map(|entry| {
+                let (timestamp, record) = (entry.key(), entry.value());
+                let data = format!("{},{:.2},{}",
+                    timestamp,
+                    record.sum.load(Ordering::SeqCst),
+                    record.count.load(Ordering::SeqCst),
+                );
+                data
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
 
         tokio::fs::write(partition_fs_path, contents).await?;
         

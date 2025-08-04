@@ -27,7 +27,7 @@ services:
 
   api03:
     <<: *api
-    hostname: api02
+    hostname: api03
 
   worker:
     build:

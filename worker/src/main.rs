@@ -112,34 +112,25 @@ async fn main() -> anyhow::Result<()> {
         let tx = tx.clone();
         let signal_rx = signal_rx.clone();
         tokio::spawn(async move {
-            'x: loop {
-                loop {
-                    match rx.recv().await {
-                        Ok(event) => {
-                            if !state.consuming_payments() {
-                                println!("Both payment processors are failing. Break worker loop");
-                                _ = tx.send(event).await?;
-                                break;
-                            }
-                            match state.process_payment(&event).await {
-                                Ok((payment_processor_id, requested_at)) => {
-                                    state.save_payment(event.1, payment_processor_id, requested_at).await?;
-                                    // println!("Saved payment: {event:?}");
-                                }
-                                Err(e) => {
-                                    eprintln!("Error processing payment: {}", e);
-                                    tx.send(event).await?;
-                                },
-                            }
+            loop {
+                while let Ok(event) = rx.recv().await {
+                    if !state.consuming_payments() {
+                        println!("Both payment processors are failing. Break worker loop");
+                        _ = tx.send(event).await?;
+                        break;
+                    }
+                    match state.process_payment(&event).await {
+                        Ok((payment_processor_id, requested_at)) => {
+                            state.save_payment(event.1, payment_processor_id, requested_at)?;
                         }
-                        Err(e) => break 'x eprintln!("Error receiving from channel: {}", e),
+                        Err(e) => {
+                            eprintln!("Error processing payment: {}", e);
+                            tx.send(event).await?;
+                        },
                     }
                 }
-                loop {
-                    match signal_rx.recv().await {
-                        Ok(_) => break,
-                        Err(e) => break 'x eprintln!("Error receiving from signal channel: {}", e),
-                    }
+                if let Err(e) = signal_rx.recv().await {
+                    break eprintln!("Error receiving from signal channel: {}", e)
                 }
             }
             Ok::<(), anyhow::Error>(())
