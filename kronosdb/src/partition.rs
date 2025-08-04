@@ -1,7 +1,8 @@
 use std::sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use crossbeam_skiplist::SkipMap;
+use uuid::{NoContext, Timestamp};
 
 use crate::{atomicf64::AtomicF64, record::Record};
 
@@ -9,7 +10,7 @@ use crate::{atomicf64::AtomicF64, record::Record};
 pub struct Partition {
     key: i64,
     storage_path: String,
-    records: Arc<SkipMap<i64, Record>>,
+    records: Arc<SkipMap<u128, Record>>,
     should_persist: Arc<AtomicBool>,
     pub start_sum: Arc<AtomicF64>,
     pub sum: Arc<AtomicF64>,
@@ -33,7 +34,8 @@ impl Partition {
     }
 
     pub fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
-        _ = self.records.insert(timestamp.timestamp_millis(), record);
+        let key = uuid::Uuid::new_v7(Timestamp::from_unix(NoContext, timestamp.timestamp().try_into().unwrap(), timestamp.nanosecond()));
+        _ = self.records.insert(key.as_u128(), record);
         let (sum, count) = self.update_sum_count();
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);
         (sum, count)

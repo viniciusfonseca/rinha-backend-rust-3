@@ -4,7 +4,6 @@ use kronosdb::Storage;
 
 use crate::payment_processor::{PaymentProcessor, PaymentProcessorIdentifier};
 
-mod atomicf64;
 mod health_check;
 mod payment_processor;
 mod storage;

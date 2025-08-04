@@ -2,6 +2,7 @@ use std::sync::{atomic::Ordering, Arc};
 
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
+use uuid::Uuid;
 
 pub use crate::{partition::Partition, record::Record};
 
@@ -105,7 +106,9 @@ impl Storage {
                         continue;
                     }
                     columns = record.split(',').collect::<Vec<_>>();
-                    let timestamp = columns[0].parse::<i64>()?;
+                    let id = columns[0].parse()?;
+                    let (seconds, sub_seconds) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
+                    let timestamp = DateTime::from_timestamp(seconds.try_into().unwrap(), sub_seconds).unwrap().timestamp();
                     if timestamp < from_key {
                         continue;
                     }
@@ -122,7 +125,9 @@ impl Storage {
                         continue;
                     }
                     columns = record.split(',').collect::<Vec<_>>();
-                    let timestamp = columns[0].parse::<i64>()?;
+                    let id = columns[0].parse()?;
+                    let (seconds, sub_seconds) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
+                    let timestamp = DateTime::from_timestamp(seconds.try_into().unwrap(), sub_seconds).unwrap().timestamp();
                     if timestamp > to_key {
                         continue;
                     }

@@ -44,7 +44,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
+          cpus: "0.85"
           memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
