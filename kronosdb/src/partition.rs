@@ -2,7 +2,6 @@ use std::sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc};
 
 use chrono::{DateTime, Timelike, Utc};
 use crossbeam_skiplist::SkipMap;
-use uuid::{NoContext, Timestamp, Uuid};
 
 use crate::{atomicf64::AtomicF64, record::Record};
 
@@ -10,7 +9,7 @@ use crate::{atomicf64::AtomicF64, record::Record};
 pub struct Partition {
     key: i64,
     storage_path: String,
-    records: Arc<SkipMap<u128, Record>>,
+    records: Arc<SkipMap<u32, Record>>,
     should_persist: Arc<AtomicBool>,
     pub start_sum: Arc<AtomicF64>,
     pub sum: Arc<AtomicF64>,
@@ -34,8 +33,8 @@ impl Partition {
     }
 
     pub fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) -> (f64, i64) {
-        let key = uuid::Uuid::new_v7(Timestamp::from_unix(NoContext, timestamp.timestamp().try_into().unwrap(), timestamp.nanosecond()));
-        _ = self.records.insert(key.as_u128(), record);
+        let nanos = timestamp.nanosecond();
+        _ = self.records.insert(nanos, record);
         let (sum, count) = self.update_sum_count();
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);
         (sum, count)
@@ -64,30 +63,12 @@ impl Partition {
 
         let partition_fs_path = format!("{}/{}", self.storage_path, self.key);
 
-        let mut contents = self.records.iter()
+        let contents = self.records.iter()
             .map(|entry| {
-                let (timestamp, record) = (entry.key(), entry.value());
-                let data = format!("{},{:.2},{}",
-                    timestamp,
-                    record.sum.load(Ordering::SeqCst),
-                    record.count.load(Ordering::SeqCst),
-                );
-                data
+                let (nanos, record) = (entry.key(), entry.value());
+                record.to_string(nanos)
             })
-            .collect::<Vec<String>>();
-
-        let first_record = self.records.iter().next().unwrap();
-        let (seconds, nanos) = Uuid::from_u128(*first_record.key()).get_timestamp().unwrap().to_unix();
-        let nanos = if nanos == 0 { 999_999_999 } else { nanos } - 1;
-        let seconds = if nanos == 999_999_999 { seconds - 1 } else { seconds };
-        let timestamp = Timestamp::from_unix(NoContext, seconds, nanos);
-        let id = Uuid::new_v7(timestamp);
-
-        contents.insert(0, format!("{},{:.2},{}",
-            id.as_u128(),
-            self.start_sum.load(Ordering::SeqCst),
-            self.start_count.load(Ordering::SeqCst)
-        ));
+            .collect::<Vec<_>>();
 
         tokio::fs::write(partition_fs_path, contents.join("\n")).await?;
         

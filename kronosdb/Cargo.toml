@@ -10,4 +10,3 @@ chrono = { workspace = true }
 crossbeam-skiplist = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
-uuid = { workspace = true }

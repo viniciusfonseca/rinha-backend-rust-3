@@ -28,7 +28,7 @@ const backendHttp = new Httpx({
     headers: {
         "Content-Type": "application/json",
     },
-    timeout: 15000,
+    timeout: 1500,
 });
 
 const paymentProcessorHttp = {

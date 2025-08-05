@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicI64, Arc};
+use std::sync::{atomic::{AtomicI64, Ordering}, Arc};
 
 use crate::atomicf64::AtomicF64;
 
@@ -16,5 +16,9 @@ impl Record {
             sum: Arc::new(AtomicF64::new(0.0)),
             count: Arc::new(AtomicI64::new(0))
         }
+    }
+
+    pub fn to_string(&self, nanos: &u32) -> String {
+        format!("{},{:.2},{:.2},{}", nanos, self.amount, self.sum.load(Ordering::SeqCst), self.count.load(Ordering::SeqCst))
     }
 }

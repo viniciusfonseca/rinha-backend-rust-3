@@ -1,6 +1,6 @@
 use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use serde::Serialize;
 
 use crate::WorkerState;
@@ -119,18 +119,20 @@ impl WorkerState {
 
         let id = &self.preferred_payment_processor().id;
         let url = &payment_processor.url;
-        let requested_at = Utc::now();
+        let requested_at = Utc::now().trunc_subsecs(6);
 
         let body = PaymentProcessorRequest {
             correlation_id: correlation_id.to_string(),
             amount: *amount,
             requested_at,
         };
+        
+        let body = serde_json::to_string(&body)?;
 
         let response = self.reqwest_client
                 .post(format!("{url}/payments"))
                 .header("Content-Type", "application/json")
-                .body(serde_json::to_string(&body)?)
+                .body(body)
                 .send()
                 .await?;
 

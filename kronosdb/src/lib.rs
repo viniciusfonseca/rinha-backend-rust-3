@@ -2,12 +2,12 @@ use std::sync::{atomic::Ordering, Arc};
 
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
-use uuid::Uuid;
 
 pub use crate::{partition::Partition, record::Record};
 
 mod atomicf64;
 mod partition;
+mod query;
 mod record;
 
 #[derive(Clone)]
@@ -68,78 +68,11 @@ impl Storage {
 
         Ok(())
     }
-
-    pub async fn query_diff_from_fs(&self, from: &DateTime<Utc>, to: &DateTime<Utc>) -> anyhow::Result<(f64, i64)> {
-
-        let from_key = from.timestamp();
-        let to_key = to.timestamp();
-        let partition_keys = tokio::fs::read_to_string(format!("{}/partitions", self.storage_path)).await?;
-        
-        let mut partition_keys = partition_keys.split('\n').filter(|key| {
-            !key.is_empty() && {
-                let key = key.parse::<i64>().unwrap();
-                key >= from_key && key <= to_key
-            }
-        })
-        .collect::<Vec<_>>();
-
-        if partition_keys.is_empty() {
-            return Ok((0.0, 0));
-        }
-
-        partition_keys.sort();
-        let mut iter = partition_keys.iter();
-
-        let first_partition = iter.next().unwrap();
-        let last_partition = iter.last().unwrap_or(first_partition);
-
-        let (from_secs, from_nanos) = (from.timestamp(), 0);
-        let (to_secs, to_nanos) = (to.timestamp(), 999_999_999);
-
-        if let (Ok((first_sum, first_count)), Ok((last_sum, last_count))) = tokio::join!(
-            async move {
-                let first_partition_data = tokio::fs::read_to_string(format!("{}/{}", self.storage_path, first_partition)).await?;
-                let records = first_partition_data.split('\n');
-                let mut columns = Vec::new();
-                for record in records {
-                    columns = record.split(',').collect::<Vec<_>>();
-                    let id = columns[0].parse()?;
-                    let (seconds, nanos) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
-                    if (seconds < from_secs.try_into().unwrap()) || (seconds == from_secs.try_into().unwrap() && nanos < from_nanos) {
-                        continue;
-                    }
-                    else { break }
-                }
-                return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
-            },
-            async move {
-                let last_partition_data = tokio::fs::read_to_string(format!("{}/{}", self.storage_path, last_partition)).await?;
-                let records = last_partition_data.split('\n');
-                let mut columns = Vec::new();
-                for record in records.rev() {
-                    columns = record.split(',').collect::<Vec<_>>();
-                    let id = columns[0].parse()?;
-                    let (seconds, sub_seconds) = Uuid::from_u128(id).get_timestamp().unwrap().to_unix();
-                    if (seconds > to_secs.try_into().unwrap()) || (seconds == to_secs.try_into().unwrap() && sub_seconds > to_nanos) {
-                        continue;
-                    }
-                    else { break }
-                }
-                return anyhow::Ok((columns[1].parse::<f64>()?, columns[2].parse::<i64>()?))
-            }
-        ) {
-            println!("{} {}", first_sum, last_sum);
-            return Ok((last_sum - first_sum, last_count - first_count));
-        }
-
-        Ok((0.0, 0))
-    }
-
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use chrono::{SubsecRound, Utc};
 
     use crate::Storage;
     
@@ -150,11 +83,11 @@ mod tests {
         let storage_path = "/tmp/kronosdb-test".to_string();
         let storage = Storage::connect(storage_path);
 
-        let start = Utc::now();
+        let start = Utc::now().trunc_subsecs(6);
         let data = 19.90;
 
         for _ in 0..15000 {
-            storage.insert_data(Utc::now(), data)?;
+            storage.insert_data(Utc::now().trunc_subsecs(6), data)?;
         }
 
         storage.persist_to_disk().await?;
