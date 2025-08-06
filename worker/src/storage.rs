@@ -5,12 +5,18 @@ use crate::payment_processor::PaymentProcessorIdentifier;
 
 pub struct Storage {
     client: tokio_postgres::Client,
-    insert_statement: tokio_postgres::Statement,
+    insert_statement_default: tokio_postgres::Statement,
+    insert_statement_fallback: tokio_postgres::Statement,
 }
 
-const PAYMENTS_INSERT_QUERY: &'static str = "
-    INSERT INTO payments (amount, payment_processor_id, requested_at)
-    VALUES ($1, $2, $3)
+const PAYMENTS_INSERT_DEFAULT_QUERY: &'static str = "
+    INSERT INTO payments_default (amount, requested_at)
+    VALUES ($1, $2)
+";
+
+const PAYMENTS_INSERT_FALLBACK_QUERY: &'static str = "
+    INSERT INTO payments_fallback (amount, requested_at)
+    VALUES ($1, $2)
 ";
 
 impl Storage {
@@ -23,13 +29,21 @@ impl Storage {
             }
         });
 
-        let insert_statement = client.prepare(PAYMENTS_INSERT_QUERY).await?;
+        let insert_statement_default = client.prepare(PAYMENTS_INSERT_DEFAULT_QUERY).await?;
+        let insert_statement_fallback = client.prepare(PAYMENTS_INSERT_FALLBACK_QUERY).await?;
 
-        Ok(Self { client, insert_statement })
+        Ok(Self {
+            client,
+            insert_statement_default,
+            insert_statement_fallback,
+        })
     }
 
     pub async fn save_payment(&self, amount: Decimal, payment_processor_id: &PaymentProcessorIdentifier, requested_at: DateTime<Utc>) -> anyhow::Result<()> {
-        self.client.execute(&self.insert_statement, &[&amount, &payment_processor_id.to_string(), &requested_at]).await?;
+        match payment_processor_id {
+            PaymentProcessorIdentifier::Default => self.client.execute(&self.insert_statement_default, &[&amount, &requested_at]).await?,
+            PaymentProcessorIdentifier::Fallback => self.client.execute(&self.insert_statement_fallback, &[&amount, &requested_at]).await?,
+        };
         Ok(())
     }
 }

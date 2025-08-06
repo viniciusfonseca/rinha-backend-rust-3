@@ -8,10 +8,13 @@ use serde::Serialize;
 use crate::ApiState;
 
 pub const PAYMENTS_SUMMARY_QUERY: &'static str = "
-SELECT COUNT(requested_at) as total_requests, COALESCE(SUM(amount), 0) as total_amount, payment_processor_id
-FROM PAYMENTS
+SELECT COUNT(requested_at) as total_requests, COALESCE(SUM(amount), 0) as total_amount, 'D' as payment_processor_id
+FROM payments_default
 WHERE requested_at BETWEEN $1 AND $2
-GROUP BY payment_processor_id";
+UNION
+SELECT COUNT(requested_at) as total_requests, COALESCE(SUM(amount), 0) as total_amount, 'F' as payment_processor_id
+FROM payments_fallback
+WHERE requested_at BETWEEN $1 AND $2;";
 
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]

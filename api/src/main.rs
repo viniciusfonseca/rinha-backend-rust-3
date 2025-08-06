@@ -18,7 +18,6 @@ struct ApiState {
     tx: async_channel::Sender<(String, Decimal)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
-    purge_statement: tokio_postgres::Statement,
 }
 
 #[tokio::main]
@@ -34,14 +33,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let purge_statement = psql_client.prepare("DELETE FROM PAYMENTS").await?;
     let (tx, rx) = async_channel::unbounded();
 
     let state = ApiState {
         tx,
         psql_client: Arc::new(psql_client),
         summary_statement,
-        purge_statement,
     };
     
     let channel_threads = std::env::var("CHANNEL_THREADS")
