@@ -6,6 +6,10 @@ use uuid::{ContextV7, NoContext, Timestamp, Uuid};
 
 use crate::{atomicf64::AtomicF64, record::Record};
 
+struct SharedContextV7(std::sync::Mutex<ContextV7>);
+static CONTEXT_V7: SharedContextV7 =
+    SharedContextV7(std::sync::Mutex::new(ContextV7::new()));
+
 #[derive(Clone)]
 pub struct Partition {
     key: i64,
@@ -34,7 +38,10 @@ impl Partition {
     }
 
     pub fn insert_record(&self, timestamp: DateTime<Utc>, record: Record) {
-        let timestamp = Timestamp::from_unix(NoContext, timestamp.nanosecond() as u64, 0); // essa é uma das maiores loucuras que já fiz programando
+        let timestamp = {
+            let context = &*CONTEXT_V7.0.lock().unwrap();
+            Timestamp::from_unix(context, timestamp.nanosecond() as u64, 0) // essa é uma das maiores loucuras que já fiz programando
+        };
         let id = Uuid::new_v7(timestamp);
         _ = self.records.insert(id.as_u128(), record);
         self.should_persist.store(true, std::sync::atomic::Ordering::Relaxed);

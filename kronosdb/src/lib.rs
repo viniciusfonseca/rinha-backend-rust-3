@@ -2,6 +2,7 @@ use std::sync::{atomic::Ordering, Arc};
 
 use chrono::{DateTime, Utc};
 use crossbeam_skiplist::SkipMap;
+use futures::lock::Mutex;
 
 pub use crate::{partition::Partition, record::Record};
 
@@ -14,6 +15,7 @@ mod record;
 pub struct Storage {
     storage_path: String,
     partitions: Arc<SkipMap<i64, Partition>>,
+    mutex: Arc<Mutex<()>>
 }
 
 impl Storage {
@@ -23,10 +25,13 @@ impl Storage {
         Self {
             storage_path,
             partitions: Arc::new(SkipMap::new()),
+            mutex: Arc::new(Mutex::new(()))
         }
     }
 
-    pub fn insert_data(&self, timestamp: DateTime<Utc>, data: f64) -> anyhow::Result<()> {
+    pub async fn insert_data(&self, timestamp: DateTime<Utc>, data: f64) -> anyhow::Result<()> {
+
+        { self.mutex.lock().await };
 
         let partition_key = timestamp.timestamp();
 
@@ -39,6 +44,8 @@ impl Storage {
 
     pub async fn persist_to_disk(&self) -> anyhow::Result<()> {
         
+        let _guard = self.mutex.lock().await;
+
         let mut partitions = Vec::new();
 
         let mut sum = 0.0;
@@ -77,9 +84,12 @@ mod tests {
         let start = Utc::now().trunc_subsecs(6);
         let data = 19.90;
 
+        let mut tasks = Vec::new();
         for _ in 0..15000 {
-            storage.insert_data(Utc::now().trunc_subsecs(6), data)?;
+            tasks.push(storage.insert_data(Utc::now().trunc_subsecs(6), data));
         }
+
+        futures::future::join_all(tasks).await;
 
         storage.persist_to_disk().await?;
 
