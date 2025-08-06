@@ -17,7 +17,7 @@ pub async fn enqueue_payment(State(state): State<ApiState>, Json(payload): Json<
 }
 
 pub async fn purge_payments(State(state): State<ApiState>) -> StatusCode {
-    if let Err(e) = state.psql_client.execute(&state.purge_statement, &[]).await {
+    if let Err(e) = state.psql_client.batch_execute("DELETE FROM payments_default; DELETE FROM payments_fallback;").await {
         eprintln!("Error purging payments: {}", e);
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
