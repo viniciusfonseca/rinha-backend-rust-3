@@ -18,7 +18,7 @@ impl Record {
         }
     }
 
-    pub fn to_string(&self, nanos: &u32) -> String {
-        format!("{},{:.2},{:.2},{}", nanos, self.amount, self.sum.load(Ordering::SeqCst), self.count.load(Ordering::SeqCst))
+    pub fn to_string(&self, uuid: &u128) -> String {
+        format!("{},{:.2},{:.2},{}", uuid, self.amount, self.sum.load(Ordering::SeqCst), self.count.load(Ordering::SeqCst))
     }
 }

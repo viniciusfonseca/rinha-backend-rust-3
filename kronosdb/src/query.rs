@@ -1,4 +1,5 @@
 use chrono::{DateTime, SubsecRound, Timelike, Utc};
+use uuid::Uuid;
 
 use crate::Storage;
 
@@ -41,8 +42,10 @@ impl Storage {
                 let mut columns = Vec::new();
                 for record in records {
                     columns = record.split(',').collect::<Vec<_>>();
-                    let nanos = columns[0].parse::<u32>()?;
-                    if nanos < from_nanos {
+                    let id = columns[0].parse::<u128>()?;
+                    let timestamp = Uuid::from_u128(id).get_timestamp().unwrap();
+                    let (nanos, _) = timestamp.to_unix();
+                    if nanos < from_nanos.into() {
                         continue;
                     }
                     else { break }
@@ -58,8 +61,10 @@ impl Storage {
                 let mut columns = Vec::new();
                 for record in records.rev() {
                     columns = record.split(',').collect::<Vec<_>>();
-                    let nanos = columns[0].parse::<u32>()?;
-                    if nanos > to_nanos {
+                    let id = columns[0].parse::<u128>()?;
+                    let timestamp = Uuid::from_u128(id).get_timestamp().unwrap();
+                    let (nanos, _) = timestamp.to_unix();
+                    if nanos > to_nanos.into() {
                         continue;
                     }
                     else { break }

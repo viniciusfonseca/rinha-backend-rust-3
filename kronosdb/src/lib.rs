@@ -30,26 +30,9 @@ impl Storage {
 
         let partition_key = timestamp.timestamp();
 
-        let (start_sum, start_count) = match self.partitions.back() {
-            Some(entry) => (entry.value().sum.load(Ordering::SeqCst), entry.value().count.load(Ordering::SeqCst)),
-            None => (0.0, 0)
-        };
-        
-        let (mut sum, mut count) = self.partitions.get_or_insert_with(partition_key,
-            || Partition::new(&self.storage_path, partition_key, start_sum, start_count))
+        self.partitions.get_or_insert_with(partition_key, || Partition::new(&self.storage_path, partition_key))
             .value()
             .insert_record(timestamp, Record::new(data));
-
-        let mut updating = false;
-        for entry in self.partitions.iter() {
-            if updating {
-                let partition = entry.value();
-                partition.start_sum.store(sum, Ordering::SeqCst);
-                partition.start_count.store(count, Ordering::SeqCst);
-                (sum, count) = partition.update_sum_count();
-            }
-            updating = *entry.key() == partition_key;
-        }
 
         Ok(())
     }
@@ -58,9 +41,17 @@ impl Storage {
         
         let mut partitions = Vec::new();
 
+        let mut sum = 0.0;
+        let mut count = 0;
+
         for entry in self.partitions.iter() {
             partitions.push(entry.key().to_string());
             let partition = entry.value();
+
+            partition.start_sum.store(sum, Ordering::SeqCst);
+            partition.start_count.store(count, Ordering::SeqCst);
+            (sum, count) = partition.update_sum_count();
+
             partition.persist_to_disk().await?;
         }
 

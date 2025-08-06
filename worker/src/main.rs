@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
                 default_storage_async.persist_to_disk(),
                 fallback_storage_async.persist_to_disk(),
             );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     });
 
