@@ -20,17 +20,25 @@ struct ApiState {
     summary_statement: tokio_postgres::Statement,
 }
 
+async fn connect_pg() -> anyhow::Result<tokio_postgres::Client> {
+    let psql_url = std::env::var("DATABASE_URL")?;
+    loop {
+        if let Ok((psql_client, psql_conn)) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await {
+            tokio::spawn(async move {
+                if let Err(e) = psql_conn.await {
+                    eprintln!("Postgres connection error: {e}");
+                }
+            });
+            return Ok(psql_client);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
-    let psql_url = std::env::var("DATABASE_URL")?;
-
-    let (psql_client, psql_conn) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await?;
-    tokio::spawn(async move {
-        if let Err(e) = psql_conn.await {
-            eprintln!("Postgres connection error: {e}");
-        }
-    });
+    let psql_client = connect_pg().await?;
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
     let (tx, rx) = async_channel::unbounded();

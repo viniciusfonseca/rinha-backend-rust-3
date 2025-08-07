@@ -2,11 +2,10 @@ use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 
 use rust_decimal::Decimal;
 
-use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}, storage::Storage};
+use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}};
 
 mod health_check;
 mod payment_processor;
-mod storage;
 mod uds;
 
 #[global_allocator]
@@ -123,7 +122,8 @@ async fn main() -> anyhow::Result<()> {
         loop {
             let mut statements_default = Vec::new();
             let mut statements_fallback = Vec::new();
-            while let Ok((amount, payment_processor_id, requested_at)) = batch_rx.try_recv() {
+            while statements_default.len() + statements_fallback.len() < 1000 &&
+            let Ok((amount, payment_processor_id, requested_at)) = batch_rx.try_recv() {
                 match payment_processor_id {
                     PaymentProcessorIdentifier::Default => statements_default.push(format!("({amount}, '{requested_at}')")),
                     PaymentProcessorIdentifier::Fallback => statements_fallback.push(format!("({amount}, '{requested_at}')")),
@@ -149,21 +149,23 @@ async fn main() -> anyhow::Result<()> {
         Ok::<(), anyhow::Error>(())
     });
 
-    let health_check_interval = tokio::time::Duration::from_secs(5);
+    let health_check_interval = tokio::time::Duration::from_secs(1);
 
-    loop {
+    'x: loop {
         let (default_health, fallback_health) = tokio::join!(
             state.health_check(PaymentProcessorIdentifier::Default),
             state.health_check(PaymentProcessorIdentifier::Fallback)
         );
         if default_health.is_err() || fallback_health.is_err() {
-            break eprintln!("Error checking payment processor health: {:?}", default_health.err().or(fallback_health.err()));
+            continue;
         }
         let update_result = &state.update_preferred_payment_processor();
         if !state.consuming_payments() && update_result.is_ok() {
             println!("One of the payment processors is healthy. Start consuming payments");
             for _ in 0..worker_threads {
-                _ = state.signal_tx.send(()).await;
+                if let Err(e) = state.signal_tx.send(()).await {
+                    break 'x eprintln!("Error sending to signal channel: {}", e)
+                }
             }
             state.update_consuming_payments(true);
         }
