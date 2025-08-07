@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (tx, rx) = async_channel::unbounded();
+    let (batch_tx, batch_rx) = async_channel::unbounded();
     let (signal_tx, signal_rx) = async_channel::bounded(worker_threads);
 
     let state = WorkerState {
@@ -67,20 +68,14 @@ async fn main() -> anyhow::Result<()> {
         let socket = socket.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            loop {
-                let mut buf = [0; 64];
-                match socket.recv(&mut buf).await {
-                    Ok(size) => {
-                        if size == 0 { continue }
-                        let message = String::from_utf8_lossy(&buf[..size]);
-                        // println!("Received message: {}", message);
-                        let split = message.split(':').collect::<Vec<&str>>();
-                        let correlation_id = split[0].to_string();
-                        let amount: Decimal = split[1].parse().unwrap_or(Decimal::ZERO);
-                        tx.send((correlation_id, amount)).await?;
-                    }
-                    Err(e) => break eprintln!("Error receiving from socket: {}", e),
-                }
+            let mut buf = [0; 64];
+            while let Ok(size) = socket.recv(&mut buf).await {
+                if size == 0 { continue }
+                let message = String::from_utf8_lossy(&buf[..size]);
+                let split = message.split(':').collect::<Vec<&str>>();
+                let correlation_id = split[0].to_string();
+                let amount: Decimal = split[1].parse().unwrap_or(Decimal::ZERO);
+                tx.send((correlation_id, amount)).await?;
             }
             Ok::<(), anyhow::Error>(())
         });
@@ -91,41 +86,68 @@ async fn main() -> anyhow::Result<()> {
         let rx = rx.clone();
         let tx = tx.clone();
         let signal_rx = signal_rx.clone();
+        let batch_tx = batch_tx.clone();
         tokio::spawn(async move {
-            'x: loop {
-                let storage = Storage::init().await?;
-                loop {
-                    match rx.recv().await {
-                        Ok(event) => {
-                            if !state.consuming_payments() {
-                                println!("Both payment processors are failing. Break worker loop");
-                                _ = tx.send(event).await?;
-                                break;
-                            }
-                            match state.process_payment(&event).await {
-                                Ok((payment_processor_id, requested_at)) => {
-                                    storage.save_payment(event.1, payment_processor_id, requested_at).await?;
-                                    // println!("Saved payment: {event:?}");
-                                }
-                                Err(e) => {
-                                    eprintln!("Error processing payment: {}", e);
-                                    tx.send(event).await?;
-                                },
-                            }
-                        }
-                        Err(e) => break 'x eprintln!("Error receiving from channel: {}", e),
+            loop {
+                while let Ok(event) = rx.recv().await {
+                    if !state.consuming_payments() {
+                        println!("Both payment processors are failing. Break worker loop");
+                        _ = tx.send(event).await?;
+                        break;
+                    }
+                    match state.process_payment(&event).await {
+                        Ok((payment_processor_id, requested_at)) =>
+                            batch_tx.send((event.1.clone(), payment_processor_id.to_owned(), requested_at)).await?,
+                        Err(e) => {
+                            eprintln!("Error processing payment: {}", e);
+                            tx.send(event).await?
+                        },
                     }
                 }
-                loop {
-                    match signal_rx.recv().await {
-                        Ok(_) => break,
-                        Err(e) => break 'x eprintln!("Error receiving from signal channel: {}", e),
-                    }
+                if let Err(e) = signal_rx.recv().await {
+                    break eprintln!("Error receiving from signal channel: {}", e)
                 }
             }
             Ok::<(), anyhow::Error>(())
         });
     }
+
+    tokio::spawn(async move {
+        let psql_url = std::env::var("DATABASE_URL")?;
+        let (mut client, connection) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await?;
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("Connection error: {e}");
+            }
+        });
+        loop {
+            let mut statements_default = Vec::new();
+            let mut statements_fallback = Vec::new();
+            while let Ok((amount, payment_processor_id, requested_at)) = batch_rx.try_recv() {
+                match payment_processor_id {
+                    PaymentProcessorIdentifier::Default => statements_default.push(format!("({amount}, '{requested_at}')")),
+                    PaymentProcessorIdentifier::Fallback => statements_fallback.push(format!("({amount}, '{requested_at}')")),
+                }
+            }
+            let insert_default = if statements_default.is_empty() {
+                String::new()
+            } else {
+                format!("INSERT INTO payments_default (amount, requested_at) VALUES {};", statements_default.join(","))
+            };
+            let insert_fallback = if statements_fallback.is_empty() {
+                String::new()
+            } else {
+                format!("INSERT INTO payments_fallback (amount, requested_at) VALUES {};", statements_fallback.join(","))
+            };
+            let transaction = client.transaction().await?;
+            transaction.batch_execute(&(insert_default + &insert_fallback)).await?;
+            if let Err(e) = transaction.commit().await {
+                break eprintln!("Error saving payments: {}", e);
+            };
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
 
     let health_check_interval = tokio::time::Duration::from_secs(5);
 
