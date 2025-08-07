@@ -144,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = transaction.commit().await {
                 break eprintln!("Error saving payments: {}", e);
             };
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
         Ok::<(), anyhow::Error>(())
     });

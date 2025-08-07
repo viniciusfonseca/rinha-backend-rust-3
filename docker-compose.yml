@@ -17,7 +17,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
+          cpus: "0.1"
           memory: "20MB"
     volumes:
       - sockets:/tmp/sockets
@@ -45,21 +45,21 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.4"
+          cpus: "0.6"
           memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
 
   nginx:
-    image: nginx:latest
+    image: openresty/openresty:bullseye
     volumes:
-      - ./assets/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./assets/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
       - sockets:/tmp/sockets
     depends_on:
       - api01
       - api02
     ports:
-      - "9999:9999"
+      - "9999:80"
     networks:
       - backend
     deploy:
@@ -92,7 +92,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.6'
+          cpus: '0.5'
           memory: '230MB'
 
 networks:

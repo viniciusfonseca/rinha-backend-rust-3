@@ -337,7 +337,7 @@ export function handleSummary(data) {
   };
 
   const result = {
-    stdout: JSON.stringify(data, null, 2),
+    stdout: JSON.stringify(custom_data, null, 2),
   };
 
   const participant = __ENV.PARTICIPANT;
