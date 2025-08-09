@@ -15,7 +15,7 @@ WORKDIR /app
 
 RUN gcc -O3 -Wall -static -o raijin-lb/raijin-lb raijin-lb/main.c -luring /usr/lib/liburing.a
 
-# FROM scratch
+FROM scratch
 
-# COPY --from=builder /app/raijin-lb/raijin-lb /usr/local/bin/raijin-lb
-CMD ["/app/raijin-lb/raijin-lb"]
+COPY --from=builder /app/raijin-lb/raijin-lb /usr/local/bin/raijin-lb
+CMD ["/usr/local/bin/raijin-lb"]
