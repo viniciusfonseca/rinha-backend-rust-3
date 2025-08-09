@@ -1,0 +1,21 @@
+FROM debian:bookworm-slim AS builder
+
+RUN apt update && apt install -y git make gcc g++ linux-libc-dev liburing-dev
+
+COPY . /app
+
+WORKDIR /app
+
+RUN git clone https://github.com/axboe/liburing.git
+WORKDIR /app/liburing
+RUN make
+RUN make install
+
+WORKDIR /app
+
+RUN gcc -O3 -Wall -static -o raijin-lb/raijin-lb raijin-lb/main.c -luring /usr/lib/liburing.a
+
+# FROM scratch
+
+# COPY --from=builder /app/raijin-lb/raijin-lb /usr/local/bin/raijin-lb
+CMD ["/app/raijin-lb/raijin-lb"]

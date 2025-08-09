@@ -1,3 +1,5 @@
 /target
 partial-results.json
 report.html
+.zig-cache
+zig-out
