@@ -1,4 +1,3 @@
-// gcc -O2 -Wall -o lb_io_uring lb_io_uring.c -luring
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,24 +32,33 @@ enum op_type {
     OP_WRITE
 };
 
+/* forward */
+struct conn;
+
 /* wrapper for sqe user data */
 struct io_data {
     enum op_type type;
-    void *conn;           // points to struct conn *
+    struct conn *c;       // connection pointer
     int fd;               // fd involved in the op
     int buf_id;           // 0 = client_buf, 1 = backend_buf
-    ssize_t len;          // used for write length or read result
+    off_t offset;         // for partial writes
+    ssize_t total_len;    // for writes: total bytes we intended to write
 };
 
-/* per-connection structure */
 struct conn {
     int client_fd;
     int backend_fd;
-    int closing;          // flag set when either side closed
+
+    int client_closed;   // client sent EOF
+    int backend_closed;  // backend sent EOF
+
+    int pending_ops;     // outstanding io_uring ops for this connection
+
     char client_buf[BUF_SIZE];
     char backend_buf[BUF_SIZE];
 };
 
+/* global */
 static struct io_uring ring;
 static int server_fd = -1;
 static volatile int stop = 0;
@@ -61,14 +69,29 @@ static void on_sigint(int s) {
     stop = 1;
 }
 
-/* set non-blocking */
+/* utility */
 static int set_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return -1;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-/* create and bind the TCP listening socket */
+static void close_connection(struct conn *c) {
+    if (!c) return;
+    if (c->client_fd >= 0) { close(c->client_fd); c->client_fd = -1; }
+    if (c->backend_fd >= 0) { close(c->backend_fd); c->backend_fd = -1; }
+    free(c);
+}
+
+/* Only free when both sides closed and no pending ops */
+static void maybe_free_conn(struct conn *c) {
+    if (!c) return;
+    if (c->client_closed && c->backend_closed && c->pending_ops == 0) {
+        close_connection(c);
+    }
+}
+
+/* create & bind TCP listening socket */
 static int make_server_socket(int port) {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if (fd < 0) { perror("socket"); return -1; }
@@ -101,31 +124,25 @@ static int make_server_socket(int port) {
     return fd;
 }
 
-/* helper to allocate io_data and set as user_data on sqe */
-static struct io_data* prepare_io(struct io_uring_sqe *sqe, enum op_type t, struct conn *c, int fd, int buf_id, off_t offset) {
+/* helpers to prepare io_data and set user_data on sqe */
+static struct io_data* make_io_data(enum op_type t, struct conn *c, int fd, int buf_id, off_t offset, ssize_t total_len) {
     struct io_data *d = malloc(sizeof(*d));
     if (!d) { perror("malloc io_data"); return NULL; }
     d->type = t;
-    d->conn = c;
+    d->c = c;
     d->fd = fd;
     d->buf_id = buf_id;
-    d->len = 0;
-    io_uring_sqe_set_data(sqe, d);
-    (void) offset;
+    d->offset = offset;
+    d->total_len = total_len;
     return d;
 }
 
-/* submit accept operation (always keep one outstanding) */
+/* submit accept - always keep one outstanding accept */
 static int submit_accept() {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     if (!sqe) return -1;
-    struct io_data *d = malloc(sizeof(*d));
+    struct io_data *d = make_io_data(OP_ACCEPT, NULL, server_fd, 0, 0, 0);
     if (!d) return -1;
-    d->type = OP_ACCEPT;
-    d->conn = NULL;
-    d->fd = server_fd;
-    d->buf_id = 0;
-    d->len = 0;
     io_uring_prep_accept(sqe, server_fd, NULL, NULL, SOCK_NONBLOCK);
     io_uring_sqe_set_data(sqe, d);
     return io_uring_submit(&ring);
@@ -145,57 +162,51 @@ static int submit_connect_backend(struct conn *c, const char *path) {
     strncpy(sun.sun_path, path, sizeof(sun.sun_path)-1);
 
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-    if (!sqe) {
-        close(sfd);
-        return -1;
-    }
+    if (!sqe) { close(sfd); return -1; }
 
-    /* prepare connect */
     io_uring_prep_connect(sqe, sfd, (struct sockaddr *)&sun, sizeof(sun));
-    struct io_data *d = prepare_io(sqe, OP_CONNECT, c, sfd, 0, 0);
+    struct io_data *d = make_io_data(OP_CONNECT, c, sfd, 0, 0, 0);
     if (!d) { close(sfd); return -1; }
 
+    io_uring_sqe_set_data(sqe, d);
+    c->pending_ops++;
     return io_uring_submit(&ring);
 }
 
-/* submit a read on given fd into the chosen buffer */
+/* submit a read on fd into buffer buf_id */
 static int submit_read(struct conn *c, int fd, int buf_id) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     if (!sqe) return -1;
 
     char *buf = (buf_id == 0) ? c->client_buf : c->backend_buf;
     io_uring_prep_read(sqe, fd, buf, BUF_SIZE, 0);
-    struct io_data *d = prepare_io(sqe, OP_READ, c, fd, buf_id, 0);
+    struct io_data *d = make_io_data(OP_READ, c, fd, buf_id, 0, 0);
     if (!d) return -1;
+
+    io_uring_sqe_set_data(sqe, d);
+    c->pending_ops++;
     return io_uring_submit(&ring);
 }
 
-/* submit a write on given fd from the chosen buffer with length len */
-static int submit_write(struct conn *c, int fd, int buf_id, size_t len) {
+/* submit a write on fd using buffer buf_id, offset and length */
+static int submit_write(struct conn *c, int fd, int buf_id, off_t offset, ssize_t len) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
     if (!sqe) return -1;
 
     char *buf = (buf_id == 0) ? c->client_buf : c->backend_buf;
-    io_uring_prep_write(sqe, fd, buf, len, 0);
-    struct io_data *d = prepare_io(sqe, OP_WRITE, c, fd, buf_id, 0);
+    io_uring_prep_write(sqe, fd, buf + offset, len, 0);
+    struct io_data *d = make_io_data(OP_WRITE, c, fd, buf_id, offset, len);
     if (!d) return -1;
-    d->len = (ssize_t)len;
+
+    io_uring_sqe_set_data(sqe, d);
+    c->pending_ops++;
     return io_uring_submit(&ring);
 }
 
-/* close and free connection */
-static void close_connection(struct conn *c) {
-    if (!c) return;
-    if (c->client_fd >= 0) { close(c->client_fd); c->client_fd = -1; }
-    if (c->backend_fd >= 0) { close(c->backend_fd); c->backend_fd = -1; }
-    free(c);
-}
-
-/* main CQE handling */
+/* handle a single CQE */
 static void handle_cqe(struct io_uring_cqe *cqe) {
     struct io_data *d = io_uring_cqe_get_data(cqe);
     if (!d) {
-        // should not happen
         io_uring_cqe_seen(&ring, cqe);
         return;
     }
@@ -203,120 +214,163 @@ static void handle_cqe(struct io_uring_cqe *cqe) {
     int res = cqe->res;
 
     if (d->type == OP_ACCEPT) {
-        /* accept completed: res is client fd or negative on error */
+        /* Accept finished */
         if (res >= 0) {
             int client_fd = res;
             set_nonblock(client_fd);
 
-            // allocate connection container
             struct conn *c = calloc(1, sizeof(*c));
-            if (!c) { perror("calloc conn"); close(client_fd); }
-            else {
+            if (!c) {
+                perror("calloc conn");
+                close(client_fd);
+            } else {
                 c->client_fd = client_fd;
                 c->backend_fd = -1;
-                c->closing = 0;
+                c->client_closed = 0;
+                c->backend_closed = 0;
+                c->pending_ops = 0;
 
-                // choose backend path round-robin
                 const char *backend_path = backends[(backend_rr++) % NUM_BACKENDS];
-
-                // submit connect. When connect completes we'll start reads.
                 if (submit_connect_backend(c, backend_path) < 0) {
                     perror("submit_connect_backend");
                     close_connection(c);
                 }
             }
         } else {
-            // accept error: log and continue
             if (res != -EAGAIN && res != -EINTR) {
                 fprintf(stderr, "accept failed: %s\n", strerror(-res));
             }
         }
 
-        // always submit another accept to keep accepting connections
+        /* always reissue accept */
         submit_accept();
     }
     else if (d->type == OP_CONNECT) {
-        /* connect completed: d->fd is backend socket */
-        struct conn *c = d->conn;
+        struct conn *c = d->c;
         int bfd = d->fd;
-
+        /* connect result in res */
         if (res == 0) {
-            // connected
+            /* connected */
             c->backend_fd = bfd;
             set_nonblock(bfd);
 
-            // Start reading both sides
-            if (submit_read(c, c->client_fd, 0) < 0) { perror("submit_read client"); close_connection(c); }
-            if (submit_read(c, c->backend_fd, 1) < 0) { perror("submit_read backend"); close_connection(c); }
+            /* start reading both sides */
+            if (submit_read(c, c->client_fd, 0) < 0) {
+                perror("submit_read client");
+                close_connection(c);
+            }
+            if (submit_read(c, c->backend_fd, 1) < 0) {
+                perror("submit_read backend");
+                close_connection(c);
+            }
         } else {
-            // connect failed
             fprintf(stderr, "connect to backend failed: %s\n", strerror(-res));
             close(bfd);
             close_connection(c);
         }
     }
     else if (d->type == OP_READ) {
-        struct conn *c = d->conn;
+        struct conn *c = d->c;
         int fd = d->fd;
         int buf_id = d->buf_id;
 
+        /* read finished: res = bytes read or <=0 */
+        c->pending_ops--;
         if (res <= 0) {
-            // EOF or error: close both sides
             if (res == 0) {
-                //peer closed
-            } else {
-                // read error
-                fprintf(stderr, "read error on fd %d: %s\n", fd, strerror(-res));
-            }
-            close_connection(c);
-        } else {
-            // got data -> write to peer
-            ssize_t got = res;
-            if (buf_id == 0) {
-                // read from client -> write to backend
-                if (c->backend_fd >= 0) {
-                    if (submit_write(c, c->backend_fd, 0, (size_t)got) < 0) {
-                        perror("submit_write backend");
-                        close_connection(c);
-                    }
+                /* peer closed (EOF) */
+                if (buf_id == 0) {
+                    c->client_closed = 1;
+                    if (c->backend_fd >= 0) shutdown(c->backend_fd, SHUT_WR);
                 } else {
-                    // backend not ready
-                    close_connection(c);
+                    c->backend_closed = 1;
+                    if (c->client_fd >= 0) shutdown(c->client_fd, SHUT_WR);
                 }
             } else {
-                // read from backend -> write to client
-                if (c->client_fd >= 0) {
-                    if (submit_write(c, c->client_fd, 1, (size_t)got) < 0) {
-                        perror("submit_write client");
-                        close_connection(c);
+                /* read error */
+                //fprintf(stderr, "read error fd %d: %s\n", fd, strerror(-res));
+                if (buf_id == 0) c->client_closed = 1;
+                else c->backend_closed = 1;
+                if (buf_id == 0 && c->backend_fd >= 0) shutdown(c->backend_fd, SHUT_WR);
+                if (buf_id == 1 && c->client_fd >= 0) shutdown(c->client_fd, SHUT_WR);
+            }
+            maybe_free_conn(c);
+        } else {
+            /* got data -> submit write to peer */
+            ssize_t got = res;
+            if (buf_id == 0) {
+                /* client -> backend */
+                if (c->backend_fd >= 0 && !c->backend_closed) {
+                    if (submit_write(c, c->backend_fd, 0, 0, got) < 0) {
+                        perror("submit_write backend");
+                        c->backend_closed = 1;
+                        maybe_free_conn(c);
                     }
                 } else {
-                    close_connection(c);
+                    // backend not available -> drop connection
+                    c->backend_closed = 1;
+                    maybe_free_conn(c);
+                }
+            } else {
+                /* backend -> client */
+                if (c->client_fd >= 0 && !c->client_closed) {
+                    if (submit_write(c, c->client_fd, 1, 0, got) < 0) {
+                        perror("submit_write client");
+                        c->client_closed = 1;
+                        maybe_free_conn(c);
+                    }
+                } else {
+                    c->client_closed = 1;
+                    maybe_free_conn(c);
                 }
             }
         }
     }
     else if (d->type == OP_WRITE) {
-        struct conn *c = d->conn;
+        struct conn *c = d->c;
         int fd = d->fd;
         int buf_id = d->buf_id;
-
+        ssize_t wrote = res;
+        /* write finished (possibly partial) */
+        c->pending_ops--;
         if (res < 0) {
-            // write error
-            fprintf(stderr, "write error on fd %d: %s\n", fd, strerror(-res));
-            close_connection(c);
+            //fprintf(stderr, "write error fd %d: %s\n", fd, strerror(-res));
+            /* on write error consider that side closed for further IO */
+            if (buf_id == 0) c->backend_closed = 1;
+            else c->client_closed = 1;
+            maybe_free_conn(c);
         } else {
-            // after a write finishes, re-issue a read on the source side
-            if (buf_id == 0) {
-                // we wrote client_buf to backend -> read from client again
-                if (c->client_fd >= 0)
-                    submit_read(c, c->client_fd, 0);
-                else close_connection(c);
+            off_t off = d->offset;
+            ssize_t total = d->total_len;
+            off += wrote;
+            if (off < total) {
+                /* partial write: submit remaining */
+                if (submit_write(c, fd, buf_id, off, total - off) < 0) {
+                    perror("submit_write partial");
+                    if (buf_id == 0) c->backend_closed = 1;
+                    else c->client_closed = 1;
+                    maybe_free_conn(c);
+                }
             } else {
-                // we wrote backend_buf to client -> read from backend again
-                if (c->backend_fd >= 0)
-                    submit_read(c, c->backend_fd, 1);
-                else close_connection(c);
+                /* full write completed -> re-issue read on source side if not closed */
+                if (buf_id == 0) {
+                    /* we wrote client_buf to backend, so re-read from client */
+                    if (!c->client_closed && c->client_fd >= 0) {
+                        if (submit_read(c, c->client_fd, 0) < 0) {
+                            perror("submit_read client");
+                            c->client_closed = 1;
+                        }
+                    }
+                } else {
+                    /* we wrote backend_buf to client, re-read from backend */
+                    if (!c->backend_closed && c->backend_fd >= 0) {
+                        if (submit_read(c, c->backend_fd, 1) < 0) {
+                            perror("submit_read backend");
+                            c->backend_closed = 1;
+                        }
+                    }
+                }
+                maybe_free_conn(c);
             }
         }
     }
@@ -331,24 +385,20 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_sigint);
     signal(SIGTERM, on_sigint);
 
-    printf("Starting raijin-lb\n");
     server_fd = make_server_socket(LISTEN_PORT);
     if (server_fd < 0) return 1;
 
-    int queue_init_result = io_uring_queue_init(RING_ENTRIES, &ring, 0);
-    if (queue_init_result < 0) {
-        printf("io_uring_queue_init failed - %s - %d\n", strerror(-queue_init_result), -queue_init_result);
+    if (io_uring_queue_init(RING_ENTRIES, &ring, 0) < 0) {
         perror("io_uring_queue_init");
         close(server_fd);
-        return 2;
+        return 1;
     }
 
-    // Prime a single accept
     if (submit_accept() < 0) {
         fprintf(stderr, "submit_accept failed\n");
         io_uring_queue_exit(&ring);
         close(server_fd);
-        return 3;
+        return 1;
     }
 
     printf("Listening on port %d\n", LISTEN_PORT);
