@@ -53,7 +53,7 @@ services:
   lb:
     build:
       context: .
-      dockerfile: docker/Dockerfile.raijin-lb.x86_64-linux-musl
+      dockerfile: docker/Dockerfile.raijin-lb.x86_64-linux
     cap_add:
       - CAP_SYS_ADMIN
       - SYS_ADMIN
