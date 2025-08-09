@@ -12,7 +12,10 @@ pub struct PaymentPayload {
 }
 
 pub async fn enqueue_payment(State(state): State<ApiState>, Json(payload): Json<PaymentPayload>) -> StatusCode {
-    _ = state.tx.send((payload.correlation_id, payload.amount)).await;
+    if let Err(e) = state.datagram.send_to(format!("{}:{}", payload.correlation_id, payload.amount).as_bytes(), "/tmp/sockets/worker.sock").await {
+        eprintln!("Error sending payment: {}", e);
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
     StatusCode::ACCEPTED
 }
 

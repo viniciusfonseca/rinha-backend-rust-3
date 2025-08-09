@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use axum::{routing, Router};
-use rust_decimal::Decimal;
 use tokio::net::UnixDatagram;
 
 mod payments;
@@ -15,7 +14,7 @@ use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    tx: async_channel::Sender<(String, Decimal)>,
+    datagram: Arc<UnixDatagram>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
 }
@@ -39,34 +38,15 @@ async fn connect_pg() -> anyhow::Result<tokio_postgres::Client> {
 async fn main() -> anyhow::Result<()> {
 
     let psql_client = connect_pg().await?;
-
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let (tx, rx) = async_channel::unbounded();
+    let datagram = UnixDatagram::unbound()?;
 
     let state = ApiState {
-        tx,
+        datagram: Arc::new(datagram),
         psql_client: Arc::new(psql_client),
         summary_statement,
     };
     
-    let channel_threads = std::env::var("CHANNEL_THREADS")
-        .unwrap_or("5".to_string())
-        .parse()?;
-
-    println!("Starting with {channel_threads} channel threads");
-
-    for _ in 0..channel_threads {
-        let rx = rx.clone();
-        tokio::spawn(async move {
-            let worker_socket = "/tmp/sockets/worker.sock";
-            let tx_worker = UnixDatagram::unbound()?;
-            while let Ok((correlation_id, amount)) = rx.recv().await {
-                tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), worker_socket).await?;
-            }
-            Ok::<(), anyhow::Error>(())
-        });
-    }
-
     let app = Router::new()
         .route("/payments", routing::post(payments::enqueue_payment))
         .route("/payments-summary", routing::get(summary::summary))
