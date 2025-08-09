@@ -1,6 +1,7 @@
 CREATE TABLE payments_default (
+    id SERIAL,
     amount DECIMAL NOT NULL,
-    requested_at TIMESTAMPTZ PRIMARY KEY
+    requested_at TIMESTAMPTZ
 )
 WITH (
     timescaledb.hypertable,
@@ -8,12 +9,14 @@ WITH (
 );
 
 CREATE TABLE payments_fallback (
+    id SERIAL,
     amount DECIMAL NOT NULL,
-    requested_at TIMESTAMPTZ PRIMARY KEY
+    requested_at TIMESTAMPTZ
 )
 WITH (
     timescaledb.hypertable,
     timescaledb.partition_column = 'requested_at'
 );
 
--- SELECT set_chunk_time_interval('payments', 1000);
+CREATE UNIQUE INDEX ON payments_default (id, requested_at);
+CREATE UNIQUE INDEX ON payments_fallback (id, requested_at);

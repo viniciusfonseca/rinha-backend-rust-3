@@ -50,3 +50,6 @@ build-image:
 
 push-image:
 	docker push distanteagle16/rinhabackend3
+
+raijin-lb:
+	musl-gcc -O3 -Wall -static -o raijin-lb/raijin-lb raijin-lb/main.c -I/usr/include

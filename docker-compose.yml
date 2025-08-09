@@ -17,7 +17,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.1"
+          cpus: "0.15"
           memory: "20MB"
     volumes:
       - sockets:/tmp/sockets
@@ -45,21 +45,27 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.6"
+          cpus: "0.4"
           memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
 
-  nginx:
-    image: openresty/openresty:bullseye
+  lb:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.raijin-lb.x86_64-linux
+    cap_add:
+      - CAP_SYS_ADMIN
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
     volumes:
-      - ./assets/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf
       - sockets:/tmp/sockets
     depends_on:
       - api01
       - api02
     ports:
-      - "9999:80"
+      - "9999:9999"
     networks:
       - backend
     deploy:
@@ -92,7 +98,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '0.6'
           memory: '230MB'
 
 networks:
