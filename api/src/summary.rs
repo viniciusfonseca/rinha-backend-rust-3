@@ -1,6 +1,5 @@
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
-use axum::{extract::{Query, State}, Json};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -29,13 +28,11 @@ pub struct PaymentsSummary {
     pub fallback: PaymentsSummaryDetails
 }
 
-pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap<String, DateTime<Utc>>>) -> Json<PaymentsSummary> {
+pub async fn summary(state: &ApiState, from: DateTime<Utc>, to: DateTime<Utc>) -> PaymentsSummary {
 
     let start = Instant::now();
-    let rows = state.psql_client.query(&state.summary_statement, &[
-        &params.get("from").unwrap_or(&Utc::now()),
-        &params.get("to").unwrap_or(&Utc::now()),
-    ]).await.expect("Failed to execute summary query");
+    let rows = state.psql_client.query(&state.summary_statement, &[&from, &to]).await
+        .expect("Failed to execute summary query");
 
     let mut default = PaymentsSummaryDetails::default();
     let mut fallback = PaymentsSummaryDetails::default();
@@ -60,8 +57,8 @@ pub async fn summary(State(state): State<ApiState>, Query(params): Query<HashMap
 
     println!("Got summary in {}ms", start.elapsed().as_millis());
 
-    Json(PaymentsSummary {
+    PaymentsSummary {
         default,
         fallback,
-    })
+    }
 }
