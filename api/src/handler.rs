@@ -1,7 +1,7 @@
 use async_channel::Receiver;
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}};
 
 use crate::{summary::summary, ApiState};
 
@@ -17,6 +17,9 @@ const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
 pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
+    let worker_socket = "/tmp/sockets/worker.sock";
+    let tx_worker = UnixDatagram::unbound()?;
+    
     while let Ok(mut stream) = http_rx.recv().await {
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
@@ -38,9 +41,10 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> an
                         continue;
                     }
                 };
+                let message = format!("{}:{}", body.correlation_id, body.amount);
                 _ = tokio::join!(
-                    state.tx.send((body.correlation_id, body.amount)),
-                    stream.write_all(HTTP_ACCEPTED_RESPONSE)
+                    stream.write_all(HTTP_ACCEPTED_RESPONSE),
+                    tx_worker.send_to(message.as_bytes(), worker_socket),
                 );
             }
             else if path.starts_with("/payments-summary") {
