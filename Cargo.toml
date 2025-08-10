@@ -18,7 +18,7 @@ crossbeam = "0.8.4"
 mimalloc = "0.1.47"
 rust_decimal = { version = "1.37.2", features = ["serde-float", "db-tokio-postgres"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.141" }
+serde_json = { version = "1.0.142" }
 tokio = { version = "1.47.1", features = ["macros", "fs", "rt-multi-thread", "io-util", "net", "time"] }
 tokio-postgres = { version = "0.7.13", features = ["with-chrono-0_4"] }
 

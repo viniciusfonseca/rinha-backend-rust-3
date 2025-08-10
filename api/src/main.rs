@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use rust_decimal::Decimal;
-use tokio::{io::AsyncWriteExt, net::UnixDatagram};
+use tokio::net::UnixDatagram;
 
 mod handler;
 mod summary;
@@ -88,9 +88,8 @@ async fn main() -> anyhow::Result<()> {
     println!("Binding to socket: {socket_path}");
     let listener = uds::create_unix_socket(&socket_path).await?;
 
-    while let Ok((mut stream, _)) = listener.accept().await {
-        stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await?;
-        // http_tx.send(stream).await?;
+    while let Ok((stream, _)) = listener.accept().await {
+        http_tx.send(stream).await?;
     }
 
     Ok(())
