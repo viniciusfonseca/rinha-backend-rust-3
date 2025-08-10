@@ -11,7 +11,7 @@ services:
       - worker
       - postgres
     environment:
-      HTTP_WORKERS: 900
+      HTTP_WORKERS: 2048
       CHANNEL_THREADS: 2
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
@@ -45,7 +45,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.6"
+          cpus: "0.5"
           memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
@@ -66,7 +66,7 @@ services:
       resources:
         limits:
           cpus: '0.2'
-          memory: '20MB'
+          memory: '40MB'
 
   postgres:
     image: timescale/timescaledb-ha:pg17
@@ -93,7 +93,7 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: '230MB'
+          memory: '210MB'
 
 networks:
   backend:
