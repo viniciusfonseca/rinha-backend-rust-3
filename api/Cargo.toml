@@ -6,8 +6,10 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-axum = "0.8.4"
+async-channel = { workspace = true }
+bytes = "1.10.1"
 chrono = { workspace = true }
+httparse = "1.10.1"
 mimalloc = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
