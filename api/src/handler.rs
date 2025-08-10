@@ -1,7 +1,7 @@
 use async_channel::Receiver;
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}, time::Instant};
 
 use crate::{summary::summary, ApiState};
 
@@ -14,13 +14,11 @@ pub struct PaymentPayload {
 
 const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
 
-pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> anyhow::Result<()> {
+pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Instant)>) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
-    let worker_socket = "/tmp/sockets/worker.sock";
-    let tx_worker = UnixDatagram::unbound()?;
     
-    while let Ok(mut stream) = http_rx.recv().await {
+    while let Ok((mut stream, bench_start)) = http_rx.recv().await {
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
@@ -41,16 +39,17 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> an
                         continue;
                     }
                 };
-                let message = format!("{}:{}", body.correlation_id, body.amount);
-                _ = tokio::join!(
-                    stream.write_all(HTTP_ACCEPTED_RESPONSE),
-                    tx_worker.send_to(message.as_bytes(), worker_socket),
-                );
+                state.tx.send((body.correlation_id, body.amount))?;
+                let millis_elapsed = bench_start.elapsed().as_millis();
+                if millis_elapsed >= 1 {
+                    println!("Slow request: {}ms", millis_elapsed);
+                }
+                stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
             }
             else if path.starts_with("/payments-summary") {
                 let mut query = std::collections::HashMap::new();
-                for pair in path.split('?').nth(1).unwrap().split('&').map(|s| s.split_once('=').unwrap()) {
-                    query.insert(pair.0.to_string(), pair.1.to_string());
+                for (key, value) in path.split('?').nth(1).unwrap().split('&').map(|s| s.split_once('=').unwrap()) {
+                    query.insert(key, value);
                 }
                 let from = query.get("from").unwrap().parse()?;
                 let to = query.get("to").unwrap().parse()?;

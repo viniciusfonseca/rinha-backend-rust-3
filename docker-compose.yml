@@ -11,7 +11,7 @@ services:
       - worker
       - postgres
     environment:
-      HTTP_WORKERS: 500
+      HTTP_WORKERS: 256
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
