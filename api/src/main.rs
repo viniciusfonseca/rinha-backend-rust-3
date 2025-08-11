@@ -53,15 +53,14 @@ async fn main() -> anyhow::Result<()> {
         loop {
             match rx.try_recv() {
                 Ok((correlation_id, amount)) => {
-                    if tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await.is_err() {
-                        break
-                    };
+                    tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await?;
                 },
                 Err(_) => {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
         }
+        #[allow(unreachable_code)]
         Ok::<(), std::io::Error>(())
     });
 
@@ -89,9 +88,11 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let mut tasks = Vec::new();
         while let Ok((stream, _)) = listener.accept() {
-            tasks.push(http_tx.send(stream))
+            tasks.push(http_tx.send(stream));
         }
-        futures::future::join_all(tasks).await;
+        if !tasks.is_empty() {
+            futures::future::join_all(tasks).await;
+        }
         tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
     }
 }

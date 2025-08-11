@@ -13,7 +13,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HTTP_WORKERS: 220
+      HTTP_WORKERS: 400
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -26,14 +26,6 @@ services:
   api02:
     <<: *api
     hostname: api02
-
-  api03:
-    <<: *api
-    hostname: api03
-
-  api04:
-    <<: *api
-    hostname: api04
 
   worker:
     build:
@@ -54,8 +46,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.4"
-          memory: "40MB"
+          cpus: "0.5"
+          memory: "60MB"
     volumes:
       - sockets:/tmp/sockets
 
@@ -101,8 +93,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.4'
-          memory: '190MB'
+          cpus: '0.5'
+          memory: '210MB'
 
 networks:
   backend:

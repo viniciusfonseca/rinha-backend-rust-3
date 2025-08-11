@@ -1,4 +1,4 @@
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{atomic::{AtomicBool, AtomicI64, Ordering}, Arc};
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -25,6 +25,8 @@ pub struct PaymentProcessor {
     pub id: PaymentProcessorIdentifier,
     pub url: String,
     pub failing: Arc<AtomicBool>,
+    pub last_health_check: Arc<AtomicI64>,
+    pub failing_period: Arc<AtomicI64>,
 }
 
 impl PaymentProcessor {
@@ -34,6 +36,8 @@ impl PaymentProcessor {
             id,
             url,
             failing: Arc::new(AtomicBool::new(false)),
+            last_health_check: Arc::new(AtomicI64::new(0)),
+            failing_period: Arc::new(AtomicI64::new(0)),
         }
     }
 

@@ -7,8 +7,8 @@ use crate::{summary::summary, ApiState};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PaymentPayload<'a> {
-    correlation_id: &'a str,
+pub struct PaymentPayload {
+    correlation_id: String,
     amount: f64,
 }
 
@@ -40,7 +40,7 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> an
                     }
                 };
                 stream.write_all(HTTP_ACCEPTED_RESPONSE)?;
-                state.tx.send((body.correlation_id.to_string(), body.amount))?;
+                state.tx.send((body.correlation_id, body.amount))?;
             }
             else if path.starts_with("/payments-summary") {
                 let mut query = std::collections::HashMap::new();
