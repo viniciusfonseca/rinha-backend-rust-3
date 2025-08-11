@@ -1,6 +1,6 @@
 services:
   api01: &api
-    image: distanteagle16/rinhabackend3-api:1.0.0
+    image: distanteagle16/rinhabackend3-api:1.1.0
     restart: always
     hostname: api01
     networks:
@@ -27,7 +27,7 @@ services:
     hostname: api02
 
   worker:
-    image: distanteagle16/rinhabackend3-worker:1.0.0
+    image: distanteagle16/rinhabackend3-worker:1.1.0
     restart: always
     networks:
       - payment-processor
