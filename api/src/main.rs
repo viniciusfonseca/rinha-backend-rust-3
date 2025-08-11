@@ -7,14 +7,13 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use rust_decimal::Decimal;
 use tokio::{net::UnixDatagram, time::Instant};
 
 use crate::{handler::handler_loop, summary::PAYMENTS_SUMMARY_QUERY};
 
 #[derive(Clone)]
 struct ApiState {
-    tx: tokio::sync::mpsc::UnboundedSender<(String, Decimal)>,
+    tx: std::sync::mpsc::Sender<(String, f64)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
 }
@@ -40,8 +39,8 @@ async fn main() -> anyhow::Result<()> {
     let psql_client = connect_pg().await?;
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let (http_tx, http_rx) = async_channel::unbounded();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (http_tx, http_rx) = async_channel::bounded(8000);
 
     let state = ApiState {
         tx,
@@ -51,8 +50,17 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(async move {
         let tx_worker = UnixDatagram::unbound()?;
-        while let Some((correlation_id, amount)) = rx.recv().await {
-            tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await?;
+        loop {
+            match rx.try_recv() {
+                Ok((correlation_id, amount)) => {
+                    if tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await.is_err() {
+                        break
+                    };
+                },
+                Err(_) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
         }
         Ok::<(), std::io::Error>(())
     });
@@ -78,9 +86,10 @@ async fn main() -> anyhow::Result<()> {
     println!("Binding to socket: {socket_path}");
     let listener = uds::create_unix_socket(&socket_path).await?;
 
-    while let Ok((stream, _)) = listener.accept().await {
-        http_tx.send((stream, Instant::now())).await?;
+    loop {
+        while let Ok((stream, _)) = listener.accept() {
+            http_tx.send((stream, Instant::now())).await?
+        }
+        tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
     }
-
-    Ok(())
 }

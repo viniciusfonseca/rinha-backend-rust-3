@@ -8,10 +8,12 @@ services:
       - payment-processor
       - backend
     depends_on:
-      - worker
-      - postgres
+      worker:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     environment:
-      HTTP_WORKERS: 200
+      HTTP_WORKERS: 150
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -29,6 +31,10 @@ services:
     <<: *api
     hostname: api03
 
+  api04:
+    <<: *api
+    hostname: api04
+
   worker:
     build:
       context: .
@@ -40,7 +46,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      CHANNEL_THREADS: 4
+      CHANNEL_THREADS: 12
       WORKER_THREADS: 8
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
@@ -95,8 +101,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: '210MB'
+          cpus: '0.4'
+          memory: '190MB'
 
 networks:
   backend:

@@ -1,7 +1,8 @@
+use std::{io::{Read, Write}, os::unix::net::UnixStream};
+
 use async_channel::Receiver;
-use rust_decimal::Decimal;
 use serde::Deserialize;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream, time::Instant};
+use tokio::time::Instant;
 
 use crate::{summary::summary, ApiState};
 
@@ -9,7 +10,7 @@ use crate::{summary::summary, ApiState};
 #[serde(rename_all = "camelCase")]
 pub struct PaymentPayload {
     correlation_id: String,
-    amount: Decimal,
+    amount: f64,
 }
 
 const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
@@ -19,10 +20,10 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Insta
     let mut buffer = [0; 256];
     
     while let Ok((mut stream, bench_start)) = http_rx.recv().await {
+
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
-
-        stream.read(&mut buffer).await?;
+        stream.read(&mut buffer)?;
 
         if let Ok(httparse::Status::Complete(start)) = req.parse(&buffer) {
             let body = &buffer[start..];
@@ -35,16 +36,16 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Insta
                     Ok(body) => body,
                     Err(e) => {
                         eprintln!("Failed to deserialize payment payload: {e}");
-                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await?;
+                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")?;
                         continue;
                     }
                 };
+                stream.write_all(HTTP_ACCEPTED_RESPONSE)?;
                 state.tx.send((body.correlation_id, body.amount))?;
                 let millis_elapsed = bench_start.elapsed().as_millis();
                 if millis_elapsed >= 1 {
                     println!("Slow request: {}ms", millis_elapsed);
                 }
-                stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
             }
             else if path.starts_with("/payments-summary") {
                 let mut query = std::collections::HashMap::new();
@@ -55,22 +56,22 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Insta
                 let to = query.get("to").unwrap().parse()?;
                 let summary = summary(&state, from, to).await;
                 let body = serde_json::to_string(&summary)?;
-                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes()).await?;
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes())?;
 
             }
             else if path == "/purge-payments" {
                 println!("Purging payments");
                 state.psql_client.batch_execute("DELETE FROM payments_default; DELETE FROM payments_fallback;").await?;
-                stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
+                stream.write_all(HTTP_ACCEPTED_RESPONSE)?;
                 println!("Finished purging payments");
             }
             else {
-                stream.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes()).await?;
+                stream.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes())?;
             }
         }
         else {
             println!("Invalid request: {}", String::from_utf8_lossy(&buffer));
-            stream.write_all("HTTP/1.1 500 Internal Server Error\r\n\r\n".as_bytes()).await?;
+            stream.write_all("HTTP/1.1 500 Internal Server Error\r\n\r\n".as_bytes())?;
         }
     }
     Ok::<(), anyhow::Error>(())
