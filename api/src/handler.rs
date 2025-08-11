@@ -1,7 +1,7 @@
 use async_channel::Receiver;
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}, time::Instant};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream, time::Instant};
 
 use crate::{summary::summary, ApiState};
 
@@ -19,9 +19,9 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Insta
     let mut buffer = [0; 256];
     
     while let Ok((mut stream, bench_start)) = http_rx.recv().await {
-
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
+
         stream.read(&mut buffer).await?;
 
         if let Ok(httparse::Status::Complete(start)) = req.parse(&buffer) {

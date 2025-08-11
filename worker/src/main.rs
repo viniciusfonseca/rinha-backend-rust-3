@@ -21,6 +21,21 @@ struct WorkerState {
     pub consuming_payments: Arc<AtomicBool>,
 }
 
+async fn connect_pg() -> anyhow::Result<tokio_postgres::Client> {
+    let psql_url = std::env::var("DATABASE_URL")?;
+    loop {
+        if let Ok((psql_client, psql_conn)) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await {
+            tokio::spawn(async move {
+                if let Err(e) = psql_conn.await {
+                    eprintln!("Postgres connection error: {e}");
+                }
+            });
+            return Ok(psql_client);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     
@@ -112,13 +127,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(async move {
-        let psql_url = std::env::var("DATABASE_URL")?;
-        let (mut client, connection) = tokio_postgres::connect(&psql_url, tokio_postgres::NoTls).await?;
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("Connection error: {e}");
-            }
-        });
+        let mut client = connect_pg().await?;
         loop {
             let mut statements_default = Vec::new();
             let mut statements_fallback = Vec::new();
@@ -139,8 +148,8 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 format!("INSERT INTO payments_fallback (amount, requested_at) VALUES {};", statements_fallback.join(","))
             };
-            let transaction = client.transaction().await?;
-            transaction.batch_execute(&(insert_default + &insert_fallback)).await?;
+            let transaction = client.transaction().await.expect("Error opening transaction");
+            transaction.batch_execute(&(insert_default + &insert_fallback)).await.expect("Error batch execute");
             if let Err(e) = transaction.commit().await {
                 break eprintln!("Error saving payments: {}", e);
             };

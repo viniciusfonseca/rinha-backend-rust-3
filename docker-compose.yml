@@ -11,7 +11,7 @@ services:
       - worker
       - postgres
     environment:
-      HTTP_WORKERS: 256
+      HTTP_WORKERS: 200
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -24,6 +24,10 @@ services:
   api02:
     <<: *api
     hostname: api02
+
+  api03:
+    <<: *api
+    hostname: api03
 
   worker:
     build:
@@ -44,8 +48,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "60MB"
+          cpus: "0.4"
+          memory: "40MB"
     volumes:
       - sockets:/tmp/sockets
 
