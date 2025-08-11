@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, task::Context};
 
 mod handler;
 mod summary;
@@ -9,7 +9,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use tokio::net::UnixDatagram;
 
-use crate::{handler::handler_loop, summary::PAYMENTS_SUMMARY_QUERY};
+use crate::{handler::handler_loop, summary::PAYMENTS_SUMMARY_QUERY, uds::SocketWaker};
 
 #[derive(Clone)]
 struct ApiState {
@@ -85,14 +85,14 @@ async fn main() -> anyhow::Result<()> {
     println!("Binding to socket: {socket_path}");
     let listener = uds::create_unix_socket(&socket_path).await?;
 
+    let waker = SocketWaker::new();
+    let mut context = Context::from_waker(&waker);
     loop {
         let mut tasks = Vec::new();
-        while let Ok((stream, _)) = listener.accept() {
+        while let std::task::Poll::Ready(Ok((stream, _))) = listener.poll_accept(&mut context) {
             tasks.push(http_tx.send(stream));
         }
-        if !tasks.is_empty() {
-            futures::future::join_all(tasks).await;
-        }
+        futures::future::join_all(tasks).await;
         tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
     }
 }

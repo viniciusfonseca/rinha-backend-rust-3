@@ -1,8 +1,7 @@
-use std::{io::{Read, Write}, os::unix::net::UnixStream};
-
 use async_channel::Receiver;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream};
 
 use crate::{summary::summary, ApiState};
 
@@ -23,7 +22,7 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> an
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
-        stream.read(&mut buffer)?;
+        stream.read(&mut buffer).await?;
 
         if let Ok(httparse::Status::Complete(start)) = req.parse(&buffer) {
             let body = &buffer[start..];
@@ -36,33 +35,33 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> an
                     Ok(body) => body,
                     Err(e) => {
                         eprintln!("Failed to deserialize payment payload: {e}");
-                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n")?;
+                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await?;
                         continue;
                     }
                 };
-                stream.write_all(HTTP_ACCEPTED_RESPONSE)?;
+                stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
                 state.tx.send((body.correlation_id, body.amount))?;
             }
             else if path.starts_with("/payments-summary") {
                 let (from, to) = get_dates_from_qs(path);
                 let summary = summary(&state, from, to).await;
                 let body = serde_json::to_string(&summary)?;
-                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes())?;
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes()).await?;
 
             }
             else if path == "/purge-payments" {
                 println!("Purging payments");
                 state.psql_client.batch_execute("DELETE FROM payments_default; DELETE FROM payments_fallback;").await?;
-                stream.write_all(HTTP_ACCEPTED_RESPONSE)?;
+                stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
                 println!("Finished purging payments");
             }
             else {
-                stream.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes())?;
+                stream.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes()).await?;
             }
         }
         else {
             println!("Invalid request: {}", String::from_utf8_lossy(&buffer));
-            stream.write_all("HTTP/1.1 500 Internal Server Error\r\n\r\n".as_bytes())?;
+            stream.write_all("HTTP/1.1 500 Internal Server Error\r\n\r\n".as_bytes()).await?;
         }
     }
     Ok::<(), anyhow::Error>(())
