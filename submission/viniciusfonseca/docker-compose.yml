@@ -1,0 +1,105 @@
+services:
+  api01: &api
+    image: distanteagle16/rinhabackend3-api:latest
+    restart: always
+    hostname: api01
+    networks:
+      - payment-processor
+      - backend
+    depends_on:
+      worker:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      HTTP_WORKERS: 400
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/db
+    deploy:
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: "20MB"
+    volumes:
+      - sockets:/tmp/sockets
+
+  api02:
+    <<: *api
+    hostname: api02
+
+  worker:
+    image: distanteagle16/rinhabackend3-worker:latest
+    restart: always
+    networks:
+      - payment-processor
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CHANNEL_THREADS: 12
+      WORKER_THREADS: 8
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/db
+      PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
+      PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "60MB"
+    volumes:
+      - sockets:/tmp/sockets
+
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./assets/nginx.conf:/etc/nginx/nginx.conf:ro
+      - sockets:/tmp/sockets
+    depends_on:
+      - api01
+      - api02
+    ports:
+      - "9999:9999"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: '40MB'
+
+  postgres:
+    image: timescale/timescaledb-ha:pg17
+    hostname: db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./assets/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./assets/postgresql.conf:/docker-entrypoint-initdb.d/postgresql.conf
+    command: postgres -c config_file=/docker-entrypoint-initdb.d/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '210MB'
+
+networks:
+  backend:
+    name: backend
+    driver: bridge
+  payment-processor:
+    external: true
+
+volumes:
+  sockets:
