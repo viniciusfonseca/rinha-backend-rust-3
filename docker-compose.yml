@@ -13,7 +13,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HTTP_WORKERS: 150
+      HTTP_WORKERS: 220
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:

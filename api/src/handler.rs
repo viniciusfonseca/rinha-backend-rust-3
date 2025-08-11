@@ -2,24 +2,23 @@ use std::{io::{Read, Write}, os::unix::net::UnixStream};
 
 use async_channel::Receiver;
 use serde::Deserialize;
-use tokio::time::Instant;
 
 use crate::{summary::summary, ApiState};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PaymentPayload {
-    correlation_id: String,
+pub struct PaymentPayload<'a> {
+    correlation_id: &'a str,
     amount: f64,
 }
 
 const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
 
-pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Instant)>) -> anyhow::Result<()> {
+pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
     
-    while let Ok((mut stream, bench_start)) = http_rx.recv().await {
+    while let Ok(mut stream) = http_rx.recv().await {
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
@@ -41,11 +40,7 @@ pub async fn handler_loop(state: &ApiState, http_rx: Receiver<(UnixStream, Insta
                     }
                 };
                 stream.write_all(HTTP_ACCEPTED_RESPONSE)?;
-                state.tx.send((body.correlation_id, body.amount))?;
-                let millis_elapsed = bench_start.elapsed().as_millis();
-                if millis_elapsed >= 1 {
-                    println!("Slow request: {}ms", millis_elapsed);
-                }
+                state.tx.send((body.correlation_id.to_string(), body.amount))?;
             }
             else if path.starts_with("/payments-summary") {
                 let mut query = std::collections::HashMap::new();

@@ -7,7 +7,7 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use tokio::{net::UnixDatagram, time::Instant};
+use tokio::net::UnixDatagram;
 
 use crate::{handler::handler_loop, summary::PAYMENTS_SUMMARY_QUERY};
 
@@ -87,9 +87,11 @@ async fn main() -> anyhow::Result<()> {
     let listener = uds::create_unix_socket(&socket_path).await?;
 
     loop {
+        let mut tasks = Vec::new();
         while let Ok((stream, _)) = listener.accept() {
-            http_tx.send((stream, Instant::now())).await?
+            tasks.push(http_tx.send(stream))
         }
+        futures::future::join_all(tasks).await;
         tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
     }
 }

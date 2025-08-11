@@ -1,6 +1,5 @@
 use std::os::unix::fs::PermissionsExt;
 
-// pub async fn create_unix_socket(socket_path: &str) -> anyhow::Result<tokio::net::UnixListener> {
 pub async fn create_unix_socket(socket_path: &str) -> anyhow::Result<std::os::unix::net::UnixListener> {
 
     _ = tokio::fs::remove_file(&socket_path).await;
@@ -9,8 +8,6 @@ pub async fn create_unix_socket(socket_path: &str) -> anyhow::Result<std::os::un
     listener.set_nonblocking(true)?;
 
     set_socket_permissions(&socket_path)?;
-
-    // let listener = tokio::net::UnixListener::from_std(listener)?;
 
     Ok(listener)
 }
