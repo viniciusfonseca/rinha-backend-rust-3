@@ -13,7 +13,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HTTP_WORKERS: 400
+      HTTP_WORKERS: 340
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -87,7 +87,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-      start_period: 10s
+      start_period: 20s
     networks:
       - backend
     deploy:

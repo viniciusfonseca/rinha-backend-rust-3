@@ -1,6 +1,6 @@
 services:
   api01: &api
-    image: distanteagle16/rinhabackend3-api:latest
+    image: distanteagle16/rinhabackend3-api:1.0.0
     restart: always
     hostname: api01
     networks:
@@ -12,7 +12,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HTTP_WORKERS: 400
+      HTTP_WORKERS: 340
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -27,7 +27,7 @@ services:
     hostname: api02
 
   worker:
-    image: distanteagle16/rinhabackend3-worker:latest
+    image: distanteagle16/rinhabackend3-worker:1.0.0
     restart: always
     networks:
       - payment-processor
@@ -81,17 +81,17 @@ services:
       - ./assets/postgresql.conf:/docker-entrypoint-initdb.d/postgresql.conf
     command: postgres -c config_file=/docker-entrypoint-initdb.d/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
     networks:
       - backend
     deploy:
       resources:
         limits:
-          cpus: '0.6'
+          cpus: '0.5'
           memory: '210MB'
 
 networks:

@@ -13,7 +13,7 @@ WHERE requested_at BETWEEN $1 AND $2
 UNION
 SELECT COUNT(requested_at) as total_requests, COALESCE(SUM(amount), 0) as total_amount, 'F' as payment_processor_id
 FROM payments_fallback
-WHERE requested_at BETWEEN $1 AND $2;";
+WHERE requested_at BETWEEN $1 AND $2 OR $1 IS NULL OR $2 IS NULL;";
 
 #[derive(Serialize, Default, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +28,7 @@ pub struct PaymentsSummary {
     pub fallback: PaymentsSummaryDetails
 }
 
-pub async fn summary(state: &ApiState, from: DateTime<Utc>, to: DateTime<Utc>) -> PaymentsSummary {
+pub async fn summary(state: &ApiState, from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> PaymentsSummary {
 
     let start = Instant::now();
     let rows = state.psql_client.query(&state.summary_statement, &[&from, &to]).await
