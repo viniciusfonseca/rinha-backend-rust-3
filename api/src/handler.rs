@@ -1,7 +1,7 @@
 use async_channel::Receiver;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpStream, UnixStream}};
 
 use crate::{summary::summary, ApiState};
 
@@ -14,7 +14,7 @@ pub struct PaymentPayload {
 
 const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
 
-pub async fn handler_loop(state: &ApiState, http_rx: Receiver<UnixStream>) -> anyhow::Result<()> {
+pub async fn handler_loop(state: &ApiState, http_rx: Receiver<TcpStream>) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
     

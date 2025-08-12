@@ -7,7 +7,7 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use tokio::net::UnixDatagram;
+use tokio::net::{TcpListener, UnixDatagram};
 
 use crate::{handler::handler_loop, summary::PAYMENTS_SUMMARY_QUERY, uds::SocketWaker};
 
@@ -83,7 +83,9 @@ async fn main() -> anyhow::Result<()> {
 
     let socket_path = format!("{sockets_dir}/{hostname}.sock");
     println!("Binding to socket: {socket_path}");
-    let listener = uds::create_unix_socket(&socket_path).await?;
+
+    // let listener = uds::create_unix_socket(&socket_path).await?;
+    let listener = TcpListener::bind("0.0.0.0:8080").await?;
 
     let waker = SocketWaker::new();
     let mut context = Context::from_waker(&waker);
