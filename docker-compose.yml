@@ -4,6 +4,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api.x86_64-unknown-linux-musl
     hostname: api01
+    expose:
+      - 8080
     networks:
       - payment-processor
       - backend
