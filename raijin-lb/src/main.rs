@@ -1,48 +1,63 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::task::Context;
-use tokio::io::{self, AsyncWriteExt};
+use deadpool::managed::{Object, Pool};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 
+use crate::uds_pool::UnixSocketConnectionManager;
 use crate::waker::SocketWaker;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod uds_pool;
 mod waker;
 
-struct AppState {
-    next_backend: AtomicUsize,
-}
+static NEXT_BACKEND: AtomicUsize = AtomicUsize::new(0);
 
-async fn handle_connection(mut inbound: TcpStream, state: Arc<AppState>, streams: &mut Vec<UnixStream>) -> io::Result<()> {
+type Manager = UnixSocketConnectionManager;
 
-    let backend_index = state.next_backend.fetch_add(1, Ordering::Relaxed) % streams.len();
-    let outbound = &mut streams[backend_index];
+async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>) -> anyhow::Result<()> {
 
-    let (mut ri, mut wi) = inbound.split();
-    let (mut ro, mut wo) = outbound.split();
+    let pool_index = NEXT_BACKEND.fetch_add(1, Ordering::Relaxed) % pools.len();
+    let upstream = &mut pools[pool_index].get().await.expect("Failed to get connection");
 
-    let client_to_server = async {
-        io::copy(&mut ri, &mut wo).await?;
-        wo.shutdown().await
-    };
+    let mut buffer = vec![0; 1024];
+    let n = client.read(&mut buffer).await?;
+    let request = &buffer[..n];
 
-    let server_to_client = async {
-        io::copy(&mut ro, &mut wi).await?;
-        wi.shutdown().await
-    };
+    // Forward to upstream
+    upstream.write_all(request).await?;
+    upstream.flush().await?;
 
-    tokio::try_join!(client_to_server, server_to_client)?;
+    // Read response from upstream
+    let mut response = Vec::new();
+    upstream.read_to_end(&mut response).await?;
+
+    // Send response to client
+    client.write_all(&response).await?;
+    client.flush().await?;
 
     Ok(())
+}
+
+async fn connect_backend(backend: &str) -> io::Result<UnixStream> {
+    loop {
+        match UnixStream::connect(backend).await {
+            Ok(stream) => { println!("[*] Connected to backend {}", backend); return Ok(stream) },
+            Err(e) => {
+                eprintln!("[!] Error connecting to backend {}: {}", backend, e);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
     let listen_addr = std::env::var("LISTEN_ADDR")
-        .unwrap_or("127.0.0.1:9999".to_string());
+        .unwrap_or("0.0.0.0:9999".to_string());
 
     let target_sockets = std::env::var("TARGET_SOCKETS")
         .expect("TARGET_SOCKETS not set")
@@ -52,27 +67,27 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&listen_addr).await?;
     println!("[*] Load balancer listening on {}", &listen_addr);
 
-    let state = Arc::new(AppState {
-        next_backend: AtomicUsize::new(0) });
-
     let (tx, rx) = async_channel::unbounded();
+
+    let mut backend_pools = Vec::new();
+    for backend in &target_sockets {
+        let manager = Manager::new(backend.to_string());
+        let pool = Pool::<Manager, Object<Manager>>::builder(manager)
+            .max_size(340)
+            .build()?;
+        backend_pools.push(pool);
+    }
 
     let http_workers = std::env::var("HTTP_WORKER_THREADS")
         .unwrap_or("10".to_string())
         .parse()?;
 
     for _ in 0..http_workers {
-        let state_clone = Arc::clone(&state);
         let rx = rx.clone();
-
-        let mut streams = Vec::with_capacity(target_sockets.len());
-        for backend in &target_sockets {
-            streams.push(UnixStream::connect(backend).await?);
-        }
+        let mut backend_pools = backend_pools.clone();
         tokio::spawn(async move {
             while let Ok(stream) = rx.recv().await {
-                let state_clone = Arc::clone(&state_clone);
-                if let Err(e) = handle_connection(stream, state_clone, &mut streams).await {
+                if let Err(e) = handle_connection(stream, &mut backend_pools).await {
                     eprintln!("[!] Error handling connection: {}", e);
                 }
             }
