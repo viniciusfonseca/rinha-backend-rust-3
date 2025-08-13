@@ -14,7 +14,6 @@ use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    // unix_datagram_sender: Arc<UnixDatagram>,
     datagram_tx: Sender<Vec<u8>>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
@@ -35,7 +34,7 @@ async fn connect_pg() -> anyhow::Result<tokio_postgres::Client> {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
 
     let psql_client = connect_pg().await?;

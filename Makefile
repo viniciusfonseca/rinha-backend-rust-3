@@ -46,11 +46,9 @@ ci-k6-test: start-payment-processors start-backend-build-detached
 	k6 run -e MAX_REQUESTS=550 tests/rinha.js
 
 build-image:
-	docker build . -t distanteagle16/rinhabackend3-api:1.2.0 -f ./docker/Dockerfile.api.x86_64-unknown-linux-musl
-	docker build . -t distanteagle16/rinhabackend3-raijin-lb:1.2.0 -f ./docker/Dockerfile.raijin-lb.x86_64-unknown-linux-musl
-	docker build . -t distanteagle16/rinhabackend3-worker:1.2.0 -f ./docker/Dockerfile.worker.x86_64-unknown-linux-musl
+	docker build . -t distanteagle16/rinhabackend3-api:1.3.0 -f ./docker/Dockerfile.api.x86_64-unknown-linux-musl
+	docker build . -t distanteagle16/rinhabackend3-worker:1.3.0 -f ./docker/Dockerfile.worker.x86_64-unknown-linux-musl
 
 push-image:
-	docker push distanteagle16/rinhabackend3-api:1.2.0
-	docker push distanteagle16/rinhabackend3-raijin-lb:1.2.0
-	docker push distanteagle16/rinhabackend3-worker:1.2.0
+	docker push distanteagle16/rinhabackend3-api:1.3.0
+	docker push distanteagle16/rinhabackend3-worker:1.3.0

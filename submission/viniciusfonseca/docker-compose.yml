@@ -12,6 +12,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      QUEUE_BACKOFF: 1
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -53,8 +54,7 @@ services:
     restart: always
     environment:
       LISTEN_ADDR: 0.0.0.0:9999
-      HTTP_WORKER_THREADS: 16
-      MIN_PERSISTENT_CONNECTIONS: 10
+      MIN_PERSISTENT_CONNECTIONS: 8
       MAX_PERSISTENT_CONNECTIONS: 340
       TARGET_SOCKETS: /tmp/sockets/api01.sock,/tmp/sockets/api02.sock
     networks:
