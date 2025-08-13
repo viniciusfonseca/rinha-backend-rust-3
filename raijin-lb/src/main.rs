@@ -19,24 +19,20 @@ async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>
     let pool_index = NEXT_BACKEND.fetch_add(1, Ordering::Relaxed) % pools.len();
     let upstream = &mut pools[pool_index].get().await.expect("Failed to get connection");
 
-    let (mut rc, mut wc) = client.split();
-    let (mut ru, mut wu) = upstream.split();
-
     let mut buffer = [0; 256];
-    let n = rc.read(&mut buffer).await?;
-    wu.write_all(&buffer[..n]).await?;
-    wu.flush().await?;
+    let n = client.read(&mut buffer).await?;
+    upstream.write_all(&buffer[..n]).await?;
+    upstream.flush().await?;
 
     buffer.fill(0);
-    let n = ru.read(&mut buffer).await?;
-    wc.write_all(&buffer[..n]).await?;
-    wc.flush().await?;
+    let n = upstream.read(&mut buffer).await?;
+    client.write_all(&buffer[..n]).await?;
+    client.flush().await?;
 
     anyhow::Ok(())
 }
 
 async fn try_connect(socket_path: &str) -> tokio::net::UnixStream {
-
     loop {
         if let Ok(stream) = tokio::net::UnixStream::connect(socket_path).await {
             return stream;
