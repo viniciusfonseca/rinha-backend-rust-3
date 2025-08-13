@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream};
 
 use crate::{summary::summary, ApiState};
 
@@ -11,12 +9,12 @@ const HTTP_PAYMENTS_ROUTE: &[u8] = b"POST /payments ";
 pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
-    let tx_worker = Arc::new(UnixDatagram::unbound()?);
+    let hostname = std::env::var("HOSTNAME")?;
+    let datagram_path = format!("/tmp/sockets/worker-{hostname}.sock");
 
     loop {
 
         let n = stream.read(&mut buffer).await?;
-
         if n == 0 {
             println!("Connection closed");
             break
@@ -24,8 +22,7 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
 
         if buffer.starts_with(HTTP_PAYMENTS_ROUTE) {
             stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
-            let tx_worker = tx_worker.clone();
-            tokio::spawn(async move { tx_worker.send_to(&buffer[..n], "/tmp/sockets/worker.sock").await.unwrap(); });
+            state.unix_datagram_sender.send_to(&buffer[..n], &datagram_path).await?;
             continue;
         }
 

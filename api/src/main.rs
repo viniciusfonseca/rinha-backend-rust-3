@@ -7,11 +7,13 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+use tokio::net::UnixDatagram;
+
 use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    // tx: tokio::sync::mpsc::UnboundedSender<(String, f64)>,
+    unix_datagram_sender: Arc<UnixDatagram>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
 }
@@ -37,28 +39,12 @@ async fn main() -> anyhow::Result<()> {
     let psql_client = connect_pg().await?;
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    // let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let state = ApiState {
-        // tx,
+        unix_datagram_sender: Arc::new(UnixDatagram::unbound()?),
         psql_client: Arc::new(psql_client),
         summary_statement,
     };
-
-    // let queue_backoff = std::env::var("QUEUE_BACKOFF")
-    //     .unwrap_or("0".to_string())
-    //     .parse()?;
-
-    // tokio::spawn(async move {
-    //     let tx_worker = UnixDatagram::unbound()?;
-    //     while let Some((correlation_id, amount)) = rx.recv().await {
-    //         tx_worker.send_to(format!("{}:{}", correlation_id, amount).as_bytes(), "/tmp/sockets/worker.sock").await?;
-    //         if queue_backoff > 0 {
-    //             tokio::time::sleep(std::time::Duration::from_millis(queue_backoff)).await;
-    //         }
-    //     }
-    //     anyhow::Ok(())
-    // });
 
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
