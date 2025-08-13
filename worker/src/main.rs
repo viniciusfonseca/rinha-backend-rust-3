@@ -1,6 +1,7 @@
 use std::sync::{atomic::{AtomicBool, AtomicU16}, Arc};
 
 use rust_decimal::Decimal;
+use serde::Deserialize;
 
 use crate::{payment_processor::{PaymentProcessor, PaymentProcessorIdentifier}};
 
@@ -34,6 +35,13 @@ async fn connect_pg() -> anyhow::Result<tokio_postgres::Client> {
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentPayload {
+    correlation_id: String,
+    amount: Decimal,
 }
 
 #[tokio::main]
@@ -82,14 +90,15 @@ async fn main() -> anyhow::Result<()> {
         let socket = socket.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            let mut buf = [0; 64];
-            while let Ok(size) = socket.recv(&mut buf).await {
-                if size == 0 { continue }
-                let message = String::from_utf8_lossy(&buf[..size]);
-                let split = message.split(':').collect::<Vec<&str>>();
-                let correlation_id = split[0].to_string();
-                let amount: Decimal = split[1].parse().unwrap_or(Decimal::ZERO);
-                tx.send((correlation_id, amount)).await?;
+            let mut buffer = [0; 64];
+            while let Ok(n) = socket.recv(&mut buffer).await {
+                if n == 0 { continue }
+                let mut headers = [httparse::EMPTY_HEADER; 64];
+                let mut req = httparse::Request::new(&mut headers);
+                if let Ok(httparse::Status::Complete(body_start)) = req.parse(&buffer[..n]) {
+                    let payment_payload: PaymentPayload = serde_json::from_slice(&buffer[body_start..])?;
+                    tx.send((payment_payload.correlation_id, payment_payload.amount)).await?;
+                }
             }
             Ok::<(), anyhow::Error>(())
         });

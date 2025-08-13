@@ -2001,6 +2001,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "chrono",
+ "httparse",
  "mimalloc",
  "reqwest",
  "rust_decimal",

@@ -14,20 +14,18 @@ static NEXT_BACKEND: AtomicUsize = AtomicUsize::new(0);
 
 type Manager = UnixSocketConnectionManager;
 
-async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>) -> anyhow::Result<()> {
+async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>, mut buffer: [u8; 256]) -> anyhow::Result<()> {
 
     let pool_index = NEXT_BACKEND.fetch_add(1, Ordering::Relaxed) % pools.len();
     let upstream = &mut pools[pool_index].get().await.expect("Failed to get connection");
 
-    let mut buffer = [0; 256];
+    buffer.fill(0);
     let n = client.read(&mut buffer).await?;
     upstream.write_all(&buffer[..n]).await?;
-    upstream.flush().await?;
 
     buffer.fill(0);
     let n = upstream.read(&mut buffer).await?;
     client.write_all(&buffer[..n]).await?;
-    client.flush().await?;
 
     anyhow::Ok(())
 }
@@ -89,8 +87,9 @@ async fn main() -> anyhow::Result<()> {
         let rx = rx.clone();
         let mut backend_pools = backend_pools.clone();
         tokio::spawn(async move {
+            let buffer = [0; 256];
             while let Ok(stream) = rx.recv().await {
-                if let Err(e) = handle_connection(stream, &mut backend_pools).await {
+                if let Err(e) = handle_connection(stream, &mut backend_pools, buffer).await {
                     eprintln!("Error handling connection: {e}");
                 }
             }

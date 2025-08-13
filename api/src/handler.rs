@@ -1,15 +1,7 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UnixStream};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}};
 
 use crate::{summary::summary, ApiState};
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PaymentPayload {
-    correlation_id: String,
-    amount: f64,
-}
 
 const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 204 No Content\r\n\r\n";
 const HTTP_PAYMENTS_ROUTE: &[u8] = b"POST /payments ";
@@ -17,6 +9,8 @@ const HTTP_PAYMENTS_ROUTE: &[u8] = b"POST /payments ";
 pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
+    let tx_worker = UnixDatagram::unbound()?;
+
     loop {
 
         let n = stream.read(&mut buffer).await?;
@@ -26,53 +20,37 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
             break
         }
 
-        if &buffer[0..15] == HTTP_PAYMENTS_ROUTE {
+        if buffer.starts_with(HTTP_PAYMENTS_ROUTE) {
             stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
-            stream.flush().await?;
+            tx_worker.send_to(&buffer[..n], "/tmp/sockets/worker.sock").await?;
+            continue;
         }
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
 
-        if let Ok(httparse::Status::Complete(start)) = req.parse(&buffer[..n]) {
-            let body = &buffer[start..];
+        if let Ok(httparse::Status::Complete(_)) = req.parse(&buffer[..n]) {
             let path = req.path.unwrap_or("");
-            let method = req.method.unwrap_or("").to_string();
 
-            if method == "POST" && path == "/payments" {
-                let body_len = body.iter().position(|&b| b == 0).unwrap_or(buffer.len());
-                let body = match serde_json::from_slice::<PaymentPayload>(&body[..body_len]) {
-                    Ok(body) => body,
-                    Err(e) => {
-                        eprintln!("Failed to deserialize payment payload: {e}");
-                        continue;
-                    }
-                };
-                state.tx.send((body.correlation_id, body.amount))?;
-            }
-            else if path.starts_with("/payments-summary") {
+            if path.starts_with("/payments-summary") {
                 let (from, to) = get_dates_from_qs(path);
                 let summary = summary(&state, from, to).await;
                 let body = serde_json::to_string(&summary)?;
                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes()).await?;
-                stream.flush().await?;
             }
             else if path == "/purge-payments" {
                 println!("Purging payments");
                 state.psql_client.batch_execute("DELETE FROM payments_default; DELETE FROM payments_fallback;").await?;
                 stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
-                stream.flush().await?;
                 println!("Finished purging payments");
             }
             else {
                 stream.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes()).await?;
-                stream.flush().await?;
             }
         }
         else {
             println!("Invalid request: {}", String::from_utf8_lossy(&buffer));
             stream.write_all("HTTP/1.1 500 Internal Server Error\r\n\r\n".as_bytes()).await?;
-            stream.flush().await?;
         }
     }
 

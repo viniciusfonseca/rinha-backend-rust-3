@@ -7,13 +7,11 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use tokio::net::UnixDatagram;
-
 use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    tx: tokio::sync::mpsc::UnboundedSender<(String, f64)>,
+    // tx: tokio::sync::mpsc::UnboundedSender<(String, f64)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
 }
@@ -39,26 +37,28 @@ async fn main() -> anyhow::Result<()> {
     let psql_client = connect_pg().await?;
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let state = ApiState {
-        tx,
+        // tx,
         psql_client: Arc::new(psql_client),
         summary_statement,
     };
 
     // let queue_backoff = std::env::var("QUEUE_BACKOFF")
-    //     .unwrap_or("1000".to_string())
+    //     .unwrap_or("0".to_string())
     //     .parse()?;
 
-    tokio::spawn(async move {
-        let tx_worker = UnixDatagram::unbound()?;
-        while let Some((correlation_id, amount)) = rx.recv().await {
-            tx_worker.send_to(format!("{}:{}", correlation_id, amount).as_bytes(), "/tmp/sockets/worker.sock").await?;
-            // tokio::time::sleep(std::time::Duration::from_millis(queue_backoff)).await;
-        }
-        anyhow::Ok(())
-    });
+    // tokio::spawn(async move {
+    //     let tx_worker = UnixDatagram::unbound()?;
+    //     while let Some((correlation_id, amount)) = rx.recv().await {
+    //         tx_worker.send_to(format!("{}:{}", correlation_id, amount).as_bytes(), "/tmp/sockets/worker.sock").await?;
+    //         if queue_backoff > 0 {
+    //             tokio::time::sleep(std::time::Duration::from_millis(queue_backoff)).await;
+    //         }
+    //     }
+    //     anyhow::Ok(())
+    // });
 
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = uds::create_unix_socket(&socket_path).await?;
 
     while let Ok((stream, _)) = listener.accept().await {
+        println!("[*] Accepted connection");
         let state = Arc::new(state.clone());
         tokio::spawn(async move {
             if let Err(e) = handler::handler_loop_stream(&state, stream).await {
