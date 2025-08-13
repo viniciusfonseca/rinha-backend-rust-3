@@ -9,8 +9,6 @@ const HTTP_PAYMENTS_ROUTE: &[u8] = b"POST /payments ";
 pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
-    let hostname = std::env::var("HOSTNAME")?;
-    let datagram_path = format!("/tmp/sockets/worker-{hostname}.sock");
 
     loop {
 
@@ -22,7 +20,7 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
 
         if buffer.starts_with(HTTP_PAYMENTS_ROUTE) {
             stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
-            state.unix_datagram_sender.send_to(&buffer[..n], &datagram_path).await?;
+            state.datagram_tx.send(buffer[..n].to_vec()).await?;
             continue;
         }
 

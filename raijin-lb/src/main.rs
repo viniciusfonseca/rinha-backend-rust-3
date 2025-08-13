@@ -43,6 +43,8 @@ async fn try_connect(socket_path: &str) -> tokio::net::UnixStream {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
+    println!("Starting Raijin LB - Num of cpus: {}", num_cpus::get());
+
     let listen_addr = std::env::var("LISTEN_ADDR")
         .unwrap_or("0.0.0.0:9999".to_string());
 

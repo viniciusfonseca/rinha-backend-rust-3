@@ -54,10 +54,12 @@ name = "api"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "chrono",
  "futures",
  "httparse",
  "mimalloc",
+ "num_cpus",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -1103,6 +1105,7 @@ dependencies = [
  "deadpool",
  "futures",
  "mimalloc",
+ "num_cpus",
  "tokio",
 ]
 

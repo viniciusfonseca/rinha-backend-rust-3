@@ -10,4 +10,5 @@ async-channel = { workspace = true }
 deadpool = "0.12"
 futures = { workspace = true }
 mimalloc = { workspace = true }
+num_cpus = "1.0"
 tokio = { workspace = true }
