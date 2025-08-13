@@ -4,8 +4,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api.x86_64-unknown-linux-musl
     hostname: api01
-    expose:
-      - 8080
     networks:
       - payment-processor
       - backend
@@ -15,7 +13,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HTTP_WORKERS: 340
+      QUEUE_BACKOFF: 100
+      QUEUE_BATCH_SIZE: 10
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -53,18 +52,25 @@ services:
     volumes:
       - sockets:/tmp/sockets
 
-  nginx:
-    image: nginx:latest
-    volumes:
-      - ./assets/nginx.conf:/etc/nginx/nginx.conf:ro
-      - sockets:/tmp/sockets
+  lb:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.raijin-lb.x86_64-unknown-linux-musl
+    environment:
+      LISTEN_ADDR: 0.0.0.0:9999
+      HTTP_WORKER_THREADS: 600
+      MIN_PERSISTENT_CONNECTIONS: 30
+      MAX_PERSISTENT_CONNECTIONS: 340
+      TARGET_SOCKETS: /tmp/sockets/api01.sock,/tmp/sockets/api02.sock
+    networks:
+      - backend
     depends_on:
       - api01
       - api02
     ports:
       - "9999:9999"
-    networks:
-      - backend
+    volumes:
+      - sockets:/tmp/sockets
     deploy:
       resources:
         limits:

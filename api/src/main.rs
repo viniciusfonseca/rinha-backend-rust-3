@@ -1,4 +1,4 @@
-use std::{sync::Arc, task::Context};
+use std::sync::Arc;
 
 mod handler;
 mod summary;
@@ -7,13 +7,14 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use tokio::net::{TcpListener, UnixDatagram};
+use futures::StreamExt;
+use tokio::net::UnixDatagram;
 
-use crate::{handler::handler_loop, summary::PAYMENTS_SUMMARY_QUERY, uds::SocketWaker};
+use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    tx: std::sync::mpsc::Sender<(String, f64)>,
+    tx: tokio::sync::mpsc::UnboundedSender<(String, f64)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
 }
@@ -39,8 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let psql_client = connect_pg().await?;
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let (tx, rx) = std::sync::mpsc::channel();
-    let (http_tx, http_rx) = async_channel::bounded(8000);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let state = ApiState {
         tx,
@@ -48,33 +48,25 @@ async fn main() -> anyhow::Result<()> {
         summary_statement,
     };
 
-    tokio::spawn(async move {
-        let tx_worker = UnixDatagram::unbound()?;
-        loop {
-            match rx.try_recv() {
-                Ok((correlation_id, amount)) => {
-                    tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await?;
-                },
-                Err(_) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-        }
-        #[allow(unreachable_code)]
-        Ok::<(), std::io::Error>(())
-    });
-
-    let http_workers = std::env::var("HTTP_WORKERS")
-        .unwrap_or("5".to_string())
+    let queue_backoff = std::env::var("QUEUE_BACKOFF")
+        .unwrap_or("100".to_string())
         .parse()?;
 
-    for _ in 0..http_workers {
-        let http_rx = http_rx.clone();
-        let state = state.clone();
-        tokio::spawn(async move {
-            handler_loop(&state, http_rx).await
-        });
-    }
+    let queue_batch_size = std::env::var("QUEUE_BATCH_SIZE")
+        .unwrap_or("100".to_string())
+        .parse()?;
+
+    tokio::spawn(async move {
+        loop {
+            let mut batch = Vec::new();
+            let n = rx.recv_many(&mut batch, queue_batch_size).await;
+            futures::stream::iter(batch).for_each_concurrent(n, |(correlation_id, amount)| async move {
+                let tx_worker = UnixDatagram::unbound().unwrap();
+                tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await.unwrap();
+            }).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(queue_backoff)).await;
+        }
+    });
 
     let sockets_dir = "/tmp/sockets";
     std::fs::create_dir_all(std::path::Path::new(sockets_dir))?;
@@ -84,17 +76,17 @@ async fn main() -> anyhow::Result<()> {
     let socket_path = format!("{sockets_dir}/{hostname}.sock");
     println!("Binding to socket: {socket_path}");
 
-    // let listener = uds::create_unix_socket(&socket_path).await?;
-    let listener = TcpListener::bind("0.0.0.0:8080").await?;
+    let listener = uds::create_unix_socket(&socket_path).await?;
 
-    let waker = SocketWaker::new();
-    let mut context = Context::from_waker(&waker);
-    loop {
-        let mut tasks = Vec::new();
-        while let std::task::Poll::Ready(Ok((stream, _))) = listener.poll_accept(&mut context) {
-            tasks.push(http_tx.send(stream));
-        }
-        futures::future::join_all(tasks).await;
-        tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
+    while let Ok((stream, _)) = listener.accept().await {
+        let state = Arc::new(state.clone());
+        tokio::spawn(async move {
+            if let Err(e) = handler::handler_loop_stream(&state, stream).await {
+                eprintln!("[!] Error handling connection: {}", e);
+            }
+        });
     }
+
+    Ok(())
+
 }
