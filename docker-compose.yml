@@ -37,8 +37,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      CHANNEL_THREADS: 180
-      WORKER_THREADS: 8
+      CHANNEL_THREADS: 40
+      WORKER_THREADS: 4
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
       PAYMENT_PROCESSOR_URL_DEFAULT: http://payment-processor-default:8080
       PAYMENT_PROCESSOR_URL_FALLBACK: http://payment-processor-fallback:8080
