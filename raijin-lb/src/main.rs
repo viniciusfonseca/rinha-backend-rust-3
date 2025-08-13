@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use deadpool::managed::{Object, Pool};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::uds_pool::UnixSocketConnectionManager;
@@ -24,13 +24,23 @@ async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>
 
     tokio::join!(
         async move {
-            tokio::io::copy(&mut rc, &mut wu).await?;
+
+            let mut buffer = [0; 256];
+            let n = rc.read(&mut buffer).await?;
+            wu.write_all(&buffer[..n]).await?;
+
             wu.flush().await?;
+
             anyhow::Ok(())
         },
         async move {
-            tokio::io::copy(&mut ru, &mut wc).await?;
+
+            let mut buffer = [0; 256];
+            let n = ru.read(&mut buffer).await?;
+            wc.write_all(&buffer[..n]).await?;
+
             wc.flush().await?;
+
             anyhow::Ok(())
         }
     )
@@ -53,13 +63,22 @@ async fn main() -> anyhow::Result<()> {
     let (tx, rx) = async_channel::unbounded();
 
     let mut backend_pools = Vec::new();
+
+    let min_persistent_connections = std::env::var("MIN_PERSISTENT_CONNECTIONS")
+        .unwrap_or("30".to_string())
+        .parse()?;
+
+    let max_persistent_connections = std::env::var("MAX_PERSISTENT_CONNECTIONS")
+        .unwrap_or("340".to_string())
+        .parse()?;
+
     for backend in &target_sockets {
         let manager = Manager::new(backend.to_string());
         let pool = Pool::<Manager, Object<Manager>>::builder(manager)
-            .max_size(340)
+            .max_size(max_persistent_connections)
             .build()?;
         let mut tasks = Vec::new();
-        for _ in 0..50 {
+        for _ in 0..min_persistent_connections {
             tasks.push(pool.get());
         }
         futures::future::join_all(tasks).await;
@@ -91,16 +110,5 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-
-    // let waker = SocketWaker::new();
-    // let mut context = Context::from_waker(&waker);
-    // loop {
-    //     let mut tasks = Vec::new();
-    //     while let std::task::Poll::Ready(Ok((stream, _))) = listener.poll_accept(&mut context) {
-    //         tasks.push(tx.send(stream));
-    //     }
-    //     futures::future::join_all(tasks).await;
-    //     tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
-    // }
 }
 

@@ -13,7 +13,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      HTTP_WORKERS: 340
+      QUEUE_BACKOFF: 100
+      QUEUE_BATCH_SIZE: 10
       DATABASE_URL: postgresql://postgres:postgres@db:5432/db
     deploy:
       resources:
@@ -26,9 +27,6 @@ services:
   api02:
     <<: *api
     hostname: api02
-    environment:
-      HTTP_WORKERS: 340
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/db
 
   worker:
     build:
@@ -61,6 +59,8 @@ services:
     environment:
       LISTEN_ADDR: 0.0.0.0:9999
       HTTP_WORKER_THREADS: 600
+      MIN_PERSISTENT_CONNECTIONS: 30
+      MAX_PERSISTENT_CONNECTIONS: 340
       TARGET_SOCKETS: /tmp/sockets/api01.sock,/tmp/sockets/api02.sock
     networks:
       - backend

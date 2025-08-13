@@ -7,13 +7,14 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+use futures::StreamExt;
 use tokio::net::UnixDatagram;
 
 use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
-    tx: std::sync::mpsc::Sender<(String, f64)>,
+    tx: tokio::sync::mpsc::UnboundedSender<(String, f64)>,
     psql_client: Arc<tokio_postgres::Client>,
     summary_statement: tokio_postgres::Statement,
 }
@@ -39,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let psql_client = connect_pg().await?;
 
     let summary_statement = psql_client.prepare(PAYMENTS_SUMMARY_QUERY).await?;
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let state = ApiState {
         tx,
@@ -47,20 +48,24 @@ async fn main() -> anyhow::Result<()> {
         summary_statement,
     };
 
+    let queue_backoff = std::env::var("QUEUE_BACKOFF")
+        .unwrap_or("100".to_string())
+        .parse()?;
+
+    let queue_batch_size = std::env::var("QUEUE_BATCH_SIZE")
+        .unwrap_or("100".to_string())
+        .parse()?;
+
     tokio::spawn(async move {
-        let tx_worker = UnixDatagram::unbound()?;
         loop {
-            match rx.try_recv() {
-                Ok((correlation_id, amount)) => {
-                    tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await?;
-                },
-                Err(_) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
+            let mut batch = Vec::new();
+            let n = rx.recv_many(&mut batch, queue_batch_size).await;
+            futures::stream::iter(batch).for_each_concurrent(n, |(correlation_id, amount)| async move {
+                let tx_worker = UnixDatagram::unbound().unwrap();
+                tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await.unwrap();
+            }).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(queue_backoff)).await;
         }
-        #[allow(unreachable_code)]
-        Ok::<(), std::io::Error>(())
     });
 
     let sockets_dir = "/tmp/sockets";
