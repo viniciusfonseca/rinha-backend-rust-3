@@ -3,13 +3,13 @@ use tokio::{io, net::UnixStream};
 
 #[derive(Debug)]
 pub enum UnixSocketError {
-    Io(io::Error),
-    ConnectionFailed(String),
+    Io(()),
+    ConnectionFailed(()),
 }
 
 impl From<io::Error> for UnixSocketError {
-    fn from(err: io::Error) -> Self {
-        UnixSocketError::Io(err)
+    fn from(_: io::Error) -> Self {
+        UnixSocketError::Io(())
     }
 }
 
@@ -31,13 +31,13 @@ impl Manager for UnixSocketConnectionManager {
     async fn create(&self) -> Result<Self::Type, Self::Error> {
         UnixStream::connect(&self.address)
             .await
-            .map_err(|e| UnixSocketError::ConnectionFailed(format!("Failed to connect: {}", e)))
+            .map_err(|_| UnixSocketError::ConnectionFailed(()))
     }
 
     async fn recycle(&self, conn: &mut UnixStream, _: &Metrics) -> RecycleResult<Self::Error> {
         match conn.writable().await {
             Ok(()) => Ok(()),
-            Err(e) => Err(deadpool::managed::RecycleError::Backend(UnixSocketError::Io(e))),
+            Err(_) => Err(deadpool::managed::RecycleError::Backend(UnixSocketError::Io(()))),
         }
     }
 }
