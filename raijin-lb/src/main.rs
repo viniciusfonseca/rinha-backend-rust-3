@@ -1,3 +1,4 @@
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use deadpool::managed::{Object, Pool};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{UnixDatagram, UnixStream}};
 
@@ -9,7 +11,7 @@ const HTTP_PAYMENTS_ROUTE: &[u8] = b"POST /payments ";
 pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
-    let tx_worker = UnixDatagram::unbound()?;
+    let tx_worker = Arc::new(UnixDatagram::unbound()?);
 
     loop {
 
@@ -22,7 +24,8 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
 
         if buffer.starts_with(HTTP_PAYMENTS_ROUTE) {
             stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
-            tx_worker.send_to(&buffer[..n], "/tmp/sockets/worker.sock").await?;
+            let tx_worker = tx_worker.clone();
+            tokio::spawn(async move { tx_worker.send_to(&buffer[..n], "/tmp/sockets/worker.sock").await.unwrap(); });
             continue;
         }
 

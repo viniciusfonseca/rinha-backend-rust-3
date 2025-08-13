@@ -90,13 +90,13 @@ async fn main() -> anyhow::Result<()> {
         let socket = socket.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            let mut buffer = [0; 64];
+            let mut buffer = [0; 256];
             while let Ok(n) = socket.recv(&mut buffer).await {
                 if n == 0 { continue }
                 let mut headers = [httparse::EMPTY_HEADER; 64];
                 let mut req = httparse::Request::new(&mut headers);
                 if let Ok(httparse::Status::Complete(body_start)) = req.parse(&buffer[..n]) {
-                    let payment_payload: PaymentPayload = serde_json::from_slice(&buffer[body_start..])?;
+                    let payment_payload: PaymentPayload = serde_json::from_slice(&buffer[body_start..n])?;
                     tx.send((payment_payload.correlation_id, payment_payload.amount)).await?;
                 }
             }
