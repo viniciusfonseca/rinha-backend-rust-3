@@ -11,7 +11,7 @@ pub struct PaymentPayload {
     amount: f64,
 }
 
-const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\nConnection: keep-alive\r\n\r\n";
+const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
 
 pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> anyhow::Result<()> {
 
@@ -20,12 +20,12 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
         let n = stream.read(&mut buffer).await?;
 
         if n == 0 {
+            println!("Connection closed");
             break
         }
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut req = httparse::Request::new(&mut headers);
-        stream.read(&mut buffer).await?;
 
         if let Ok(httparse::Status::Complete(start)) = req.parse(&buffer[..n]) {
             let body = &buffer[start..];
@@ -38,36 +38,39 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
                     Ok(body) => body,
                     Err(e) => {
                         eprintln!("Failed to deserialize payment payload: {e}");
-                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: keep-alive\r\n\r\n").await?;
+                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await?;
                         stream.flush().await?;
                         continue;
                     }
                 };
                 stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
+                stream.flush().await?;
                 state.tx.send((body.correlation_id, body.amount))?;
             }
             else if path.starts_with("/payments-summary") {
                 let (from, to) = get_dates_from_qs(path);
                 let summary = summary(&state, from, to).await;
                 let body = serde_json::to_string(&summary)?;
-                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}", body.len(), body).as_bytes()).await?;
-
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).as_bytes()).await?;
+                stream.flush().await?;
             }
             else if path == "/purge-payments" {
                 println!("Purging payments");
                 state.psql_client.batch_execute("DELETE FROM payments_default; DELETE FROM payments_fallback;").await?;
                 stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
+                stream.flush().await?;
                 println!("Finished purging payments");
             }
             else {
-                stream.write_all("HTTP/1.1 404 Not Found\r\nConnection: keep-alive\r\n\r\n".as_bytes()).await?;
+                stream.write_all("HTTP/1.1 404 Not Found\r\n\r\n".as_bytes()).await?;
+                stream.flush().await?;
             }
         }
         else {
             println!("Invalid request: {}", String::from_utf8_lossy(&buffer));
-            stream.write_all("HTTP/1.1 500 Internal Server Error\r\nConnection: keep-alive\r\n\r\n".as_bytes()).await?;
+            stream.write_all("HTTP/1.1 500 Internal Server Error\r\n\r\n".as_bytes()).await?;
+            stream.flush().await?;
         }
-        stream.flush().await?;
     }
 
     Ok(())

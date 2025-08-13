@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Context;
 use deadpool::managed::{Object, Pool};
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UnixStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::uds_pool::UnixSocketConnectionManager;
 use crate::waker::SocketWaker;
@@ -22,35 +22,19 @@ async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>
     let pool_index = NEXT_BACKEND.fetch_add(1, Ordering::Relaxed) % pools.len();
     let upstream = &mut pools[pool_index].get().await.expect("Failed to get connection");
 
-    let mut buffer = vec![0; 1024];
+    let mut buffer = [0; 256];
     let n = client.read(&mut buffer).await?;
-    let request = &buffer[..n];
 
-    // Forward to upstream
-    upstream.write_all(request).await?;
+    upstream.write_all(&buffer[..n]).await?;
     upstream.flush().await?;
 
-    // Read response from upstream
-    let mut response = Vec::new();
-    upstream.read_to_end(&mut response).await?;
+    buffer = [0; 256];
+    let n = upstream.read(&mut buffer).await?;
 
-    // Send response to client
-    client.write_all(&response).await?;
-    client.flush().await?;
+    client.write_all(&buffer[..n]).await?;
+    client.shutdown().await?;
 
     Ok(())
-}
-
-async fn connect_backend(backend: &str) -> io::Result<UnixStream> {
-    loop {
-        match UnixStream::connect(backend).await {
-            Ok(stream) => { println!("[*] Connected to backend {}", backend); return Ok(stream) },
-            Err(e) => {
-                eprintln!("[!] Error connecting to backend {}: {}", backend, e);
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        }
-    }
 }
 
 #[tokio::main]
