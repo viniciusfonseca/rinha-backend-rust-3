@@ -7,7 +7,6 @@ mod uds;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use futures::StreamExt;
 use tokio::net::UnixDatagram;
 
 use crate::summary::PAYMENTS_SUMMARY_QUERY;
@@ -48,24 +47,17 @@ async fn main() -> anyhow::Result<()> {
         summary_statement,
     };
 
-    let queue_backoff = std::env::var("QUEUE_BACKOFF")
-        .unwrap_or("100".to_string())
-        .parse()?;
-
-    let queue_batch_size = std::env::var("QUEUE_BATCH_SIZE")
-        .unwrap_or("100".to_string())
-        .parse()?;
+    // let queue_backoff = std::env::var("QUEUE_BACKOFF")
+    //     .unwrap_or("1000".to_string())
+    //     .parse()?;
 
     tokio::spawn(async move {
-        loop {
-            let mut batch = Vec::new();
-            let n = rx.recv_many(&mut batch, queue_batch_size).await;
-            futures::stream::iter(batch).for_each_concurrent(n, |(correlation_id, amount)| async move {
-                let tx_worker = UnixDatagram::unbound().unwrap();
-                tx_worker.send_to(format!("{correlation_id}:{amount}").as_bytes(), "/tmp/sockets/worker.sock").await.unwrap();
-            }).await;
-            tokio::time::sleep(tokio::time::Duration::from_millis(queue_backoff)).await;
+        let tx_worker = UnixDatagram::unbound()?;
+        while let Some((correlation_id, amount)) = rx.recv().await {
+            tx_worker.send_to(format!("{}:{}", correlation_id, amount).as_bytes(), "/tmp/sockets/worker.sock").await?;
+            // tokio::time::sleep(std::time::Duration::from_millis(queue_backoff)).await;
         }
+        anyhow::Ok(())
     });
 
     let sockets_dir = "/tmp/sockets";
