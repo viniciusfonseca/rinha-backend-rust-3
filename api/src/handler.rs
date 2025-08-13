@@ -11,17 +11,24 @@ pub struct PaymentPayload {
     amount: f64,
 }
 
-const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 202 Accepted\r\n\r\n";
+const HTTP_ACCEPTED_RESPONSE: &[u8] = b"HTTP/1.1 204 No Content\r\n\r\n";
+const HTTP_PAYMENTS_ROUTE: &[u8] = b"POST /payments ";
 
 pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> anyhow::Result<()> {
 
     let mut buffer = [0; 256];
     loop {
+
         let n = stream.read(&mut buffer).await?;
 
         if n == 0 {
             println!("Connection closed");
             break
+        }
+
+        if &buffer[0..15] == HTTP_PAYMENTS_ROUTE {
+            stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
+            stream.flush().await?;
         }
 
         let mut headers = [httparse::EMPTY_HEADER; 64];
@@ -38,13 +45,9 @@ pub async fn handler_loop_stream(state: &ApiState, mut stream: UnixStream) -> an
                     Ok(body) => body,
                     Err(e) => {
                         eprintln!("Failed to deserialize payment payload: {e}");
-                        stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await?;
-                        stream.flush().await?;
                         continue;
                     }
                 };
-                stream.write_all(HTTP_ACCEPTED_RESPONSE).await?;
-                stream.flush().await?;
                 state.tx.send((body.correlation_id, body.amount))?;
             }
             else if path.starts_with("/payments-summary") {

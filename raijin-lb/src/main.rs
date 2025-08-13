@@ -14,7 +14,7 @@ static NEXT_BACKEND: AtomicUsize = AtomicUsize::new(0);
 
 type Manager = UnixSocketConnectionManager;
 
-async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>) -> (anyhow::Result<()>, anyhow::Result<()>) {
+async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>) -> anyhow::Result<()> {
 
     let pool_index = NEXT_BACKEND.fetch_add(1, Ordering::Relaxed) % pools.len();
     let upstream = &mut pools[pool_index].get().await.expect("Failed to get connection");
@@ -22,28 +22,27 @@ async fn handle_connection(mut client: TcpStream, pools: &mut Vec<Pool<Manager>>
     let (mut rc, mut wc) = client.split();
     let (mut ru, mut wu) = upstream.split();
 
-    tokio::join!(
-        async move {
+    let mut buffer = [0; 256];
+    let n = rc.read(&mut buffer).await?;
+    wu.write_all(&buffer[..n]).await?;
+    wu.flush().await?;
 
-            let mut buffer = [0; 256];
-            let n = rc.read(&mut buffer).await?;
-            wu.write_all(&buffer[..n]).await?;
+    buffer.fill(0);
+    let n = ru.read(&mut buffer).await?;
+    wc.write_all(&buffer[..n]).await?;
+    wc.flush().await?;
 
-            wu.flush().await?;
+    anyhow::Ok(())
+}
 
-            anyhow::Ok(())
-        },
-        async move {
+async fn try_connect(socket_path: &str) -> tokio::net::UnixStream {
 
-            let mut buffer = [0; 256];
-            let n = ru.read(&mut buffer).await?;
-            wc.write_all(&buffer[..n]).await?;
-
-            wc.flush().await?;
-
-            anyhow::Ok(())
+    loop {
+        if let Ok(stream) = tokio::net::UnixStream::connect(socket_path).await {
+            return stream;
         }
-    )
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 #[tokio::main]
@@ -73,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()?;
 
     for backend in &target_sockets {
+        try_connect(backend).await;
         let manager = Manager::new(backend.to_string());
         let pool = Pool::<Manager, Object<Manager>>::builder(manager)
             .max_size(max_persistent_connections)
@@ -94,11 +94,8 @@ async fn main() -> anyhow::Result<()> {
         let mut backend_pools = backend_pools.clone();
         tokio::spawn(async move {
             while let Ok(stream) = rx.recv().await {
-                match handle_connection(stream, &mut backend_pools).await {
-                    (Err(e), Ok(_)) => eprintln!("Error handling connection: {e}"),
-                    (Ok(_), Err(e)) => eprintln!("Error handling connection: {e}"),
-                    (Err(e1), Err(e2)) => eprintln!("Error handling connection: {e1} {e2}"),
-                    _ => {}
+                if let Err(e) = handle_connection(stream, &mut backend_pools).await {
+                    eprintln!("Error handling connection: {e}");
                 }
             }
             Ok::<(), anyhow::Error>(())
