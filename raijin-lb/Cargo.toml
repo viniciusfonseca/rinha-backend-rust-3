@@ -7,7 +7,7 @@ rust-version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-channel = { workspace = true }
-deadpool = "0.12.2"
-futures = "0.3"
+deadpool = "0.12"
+futures = { workspace = true }
 mimalloc = { workspace = true }
 tokio = { workspace = true }

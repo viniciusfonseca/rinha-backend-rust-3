@@ -1,4 +1,4 @@
-use std::{sync::Arc, task::Context};
+use std::sync::Arc;
 
 mod handler;
 mod summary;
@@ -9,7 +9,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use tokio::net::UnixDatagram;
 
-use crate::{summary::PAYMENTS_SUMMARY_QUERY, uds::SocketWaker};
+use crate::summary::PAYMENTS_SUMMARY_QUERY;
 
 #[derive(Clone)]
 struct ApiState {
@@ -73,17 +73,15 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = uds::create_unix_socket(&socket_path).await?;
 
-    let waker = SocketWaker::new();
-    let mut context = Context::from_waker(&waker);
-    loop {
-        while let std::task::Poll::Ready(Ok((stream, _))) = listener.poll_accept(&mut context) {
-            let state = state.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handler::handler_loop_stream(&state, stream).await {
-                    eprintln!("[!] Error handling connection: {}", e);
-                }
-            });
-        }
-        tokio::time::sleep(std::time::Duration::from_nanos(10)).await;
+    while let Ok((stream, _)) = listener.accept().await {
+        let state = Arc::new(state.clone());
+        tokio::spawn(async move {
+            if let Err(e) = handler::handler_loop_stream(&state, stream).await {
+                eprintln!("[!] Error handling connection: {}", e);
+            }
+        });
     }
+
+    Ok(())
+
 }
